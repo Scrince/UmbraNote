@@ -6,15 +6,451 @@
 #include <zeronote/text_codec.h>
 
 #include <algorithm>
+#include <iterator>
 #include <vector>
 
 #include <dwmapi.h>
+#include <uxtheme.h>
+#include <windowsx.h>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 AppState g_app;
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1
+#define DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 19
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
+#ifndef MIM_BACKGROUND
+#define MIM_BACKGROUND 0x00000004
+#endif
+#ifndef MIM_APPLYTOSUBMENUS
+#define MIM_APPLYTOSUBMENUS 0x80000000
+#endif
+#ifndef MIM_STYLE
+#define MIM_STYLE 0x00000010
+#endif
+#ifndef MNS_MODE_BACKGROUNDS
+#define MNS_MODE_BACKGROUNDS 0x04000000
+#endif
+
+constexpr COLORREF kLightEditorBg = RGB(255, 255, 255);
+constexpr COLORREF kLightEditorFg = RGB(0, 0, 0);
+constexpr COLORREF kLightChromeBorder = RGB(225, 225, 225);
+constexpr COLORREF kLightStatusBg = RGB(240, 240, 240);
+constexpr COLORREF kLightTitleBarBg = RGB(255, 255, 255);
+constexpr COLORREF kLightTitleBarFg = RGB(0, 0, 0);
+
+constexpr COLORREF kDarkMenuBarBg = RGB(31, 31, 31);
+constexpr COLORREF kDarkMenuBarHover = RGB(52, 52, 52);
+constexpr COLORREF kDarkMenuBarFg = RGB(255, 255, 255);
+constexpr COLORREF kDarkTitleBarBg = RGB(24, 24, 24);
+constexpr COLORREF kDarkEditorBg = RGB(28, 28, 28);
+constexpr COLORREF kDarkEditorFg = RGB(255, 255, 255);
+constexpr COLORREF kDarkChromeBorder = RGB(32, 32, 32);
+constexpr COLORREF kDarkStatusBg = RGB(31, 31, 31);
+constexpr const wchar_t* kMenuBarClassName = L"UmbraNoteMenuBar";
+constexpr const wchar_t* kStatusBarClassName = L"UmbraNoteStatusBar";
+
+struct UxThemeApi {
+    HMODULE module = nullptr;
+    BOOL(WINAPI* allow_dark_mode_for_window)(HWND, BOOL) = nullptr;
+    BOOL(WINAPI* set_preferred_app_mode)(int) = nullptr;
+    BOOL(WINAPI* should_apps_use_dark_mode)() = nullptr;
+    BOOL(WINAPI* flush_menu_themes)() = nullptr;
+};
+
+UxThemeApi g_uxtheme;
+
+bool IsSystemDarkModeEnabled() {
+    if (g_uxtheme.should_apps_use_dark_mode) {
+        return g_uxtheme.should_apps_use_dark_mode() != FALSE;
+    }
+
+    DWORD useLightTheme = 1;
+    DWORD size = sizeof(useLightTheme);
+    const LSTATUS status = RegGetValueW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &useLightTheme, &size);
+    if (status == ERROR_SUCCESS) {
+        return useLightTheme == 0;
+    }
+    return false;
+}
+
+void UpdateThemeBrushes() {
+    if (g_app.hEditBrush) {
+        DeleteObject(g_app.hEditBrush);
+        g_app.hEditBrush = nullptr;
+    }
+    if (g_app.hStatusBrush) {
+        DeleteObject(g_app.hStatusBrush);
+        g_app.hStatusBrush = nullptr;
+    }
+    if (g_app.hMenuBrush) {
+        DeleteObject(g_app.hMenuBrush);
+        g_app.hMenuBrush = nullptr;
+    }
+
+    g_app.editorBg = g_app.darkMode ? kDarkEditorBg : kLightEditorBg;
+    g_app.editorFg = g_app.darkMode ? kDarkEditorFg : kLightEditorFg;
+    g_app.hEditBrush = CreateSolidBrush(g_app.editorBg);
+    const COLORREF statusBg = g_app.darkMode ? kDarkStatusBg : kLightStatusBg;
+    g_app.hStatusBrush = CreateSolidBrush(statusBg);
+    if (g_app.darkMode) {
+        g_app.hMenuBrush = CreateSolidBrush(kDarkMenuBarBg);
+    }
+}
+
+void RestoreStandardMenuBar(HWND hwnd) {
+    HMENU menu = GetMenu(hwnd);
+    if (!menu) {
+        return;
+    }
+
+    const int itemCount = GetMenuItemCount(menu);
+    for (int i = 0; i < itemCount; ++i) {
+        wchar_t label[64] = {};
+        GetMenuStringW(menu, i, label, static_cast<int>(std::size(label)), MF_BYPOSITION);
+
+        MENUITEMINFOW itemInfo{};
+        itemInfo.cbSize = sizeof(MENUITEMINFOW);
+        itemInfo.fMask = MIIM_TYPE | MIIM_DATA | MIIM_SUBMENU | MIIM_ID | MIIM_STATE;
+        GetMenuItemInfoW(menu, i, MF_BYPOSITION, &itemInfo);
+
+        itemInfo.fType = MFT_STRING;
+        itemInfo.fMask = MIIM_TYPE | MIIM_DATA | MIIM_SUBMENU | MIIM_ID | MIIM_STATE;
+        itemInfo.dwTypeData = label;
+        SetMenuItemInfoW(menu, i, MF_BYPOSITION, &itemInfo);
+    }
+
+    MENUINFO menuInfo{};
+    menuInfo.cbSize = sizeof(MENUINFO);
+    menuInfo.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS | MIM_STYLE;
+    menuInfo.dwStyle = 0;
+    menuInfo.hbrBack = nullptr;
+    SetMenuInfo(menu, &menuInfo);
+    DrawMenuBar(hwnd);
+}
+
+void SetupOwnerDrawMenuBar(HWND hwnd) {
+    HMENU menu = GetMenu(hwnd);
+    if (!menu) {
+        return;
+    }
+
+    const int itemCount = GetMenuItemCount(menu);
+    for (int i = 0; i < itemCount; ++i) {
+        MENUITEMINFOW itemInfo{};
+        itemInfo.cbSize = sizeof(MENUITEMINFOW);
+        itemInfo.fMask = MIIM_FTYPE | MIIM_DATA | MIIM_SUBMENU;
+        if (!GetMenuItemInfoW(menu, i, MF_BYPOSITION, &itemInfo) || !itemInfo.hSubMenu) {
+            continue;
+        }
+
+        itemInfo.fMask = MIIM_FTYPE | MIIM_DATA;
+        itemInfo.fType = MFT_OWNERDRAW;
+        itemInfo.dwItemData = static_cast<ULONG_PTR>(i);
+        SetMenuItemInfoW(menu, i, MF_BYPOSITION, &itemInfo);
+    }
+
+    DrawMenuBar(hwnd);
+}
+
+void ApplyMenuTheme(HWND hwnd) {
+    HMENU menu = GetMenu(hwnd);
+    if (!menu) {
+        return;
+    }
+
+    if (g_app.darkMode) {
+        SetupOwnerDrawMenuBar(hwnd);
+    } else {
+        RestoreStandardMenuBar(hwnd);
+        return;
+    }
+
+    MENUINFO menuInfo{};
+    menuInfo.cbSize = sizeof(MENUINFO);
+    menuInfo.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS | MIM_STYLE;
+    menuInfo.dwStyle = MNS_MODE_BACKGROUNDS;
+    menuInfo.hbrBack = g_app.hMenuBrush;
+    SetMenuInfo(menu, &menuInfo);
+    DrawMenuBar(hwnd);
+}
+
+void MeasureOwnerDrawMenuItem(HWND hwnd, MEASUREITEMSTRUCT* measureInfo) {
+    wchar_t label[64] = {};
+    GetMenuStringW(GetMenu(hwnd), static_cast<int>(measureInfo->itemData), label,
+                   static_cast<int>(std::size(label)), MF_BYPOSITION);
+
+    const HDC hdc = GetDC(hwnd);
+    const HFONT oldFont = static_cast<HFONT>(SelectObject(
+        hdc, g_app.hUiFont ? g_app.hUiFont : GetStockObject(DEFAULT_GUI_FONT)));
+    SIZE textSize{};
+    GetTextExtentPoint32W(hdc, label, static_cast<int>(wcslen(label)), &textSize);
+    SelectObject(hdc, oldFont);
+    ReleaseDC(hwnd, hdc);
+
+    measureInfo->itemHeight = 24;
+    measureInfo->itemWidth = textSize.cx + 28;
+}
+
+void DrawOwnerDrawMenuItem(HWND hwnd, DRAWITEMSTRUCT* drawInfo) {
+    wchar_t label[64] = {};
+    GetMenuStringW(GetMenu(hwnd), static_cast<int>(drawInfo->itemData), label,
+                   static_cast<int>(std::size(label)), MF_BYPOSITION);
+
+    const bool selected = (drawInfo->itemState & ODS_SELECTED) != 0;
+    const COLORREF background = selected ? kDarkMenuBarHover : kDarkMenuBarBg;
+    HBRUSH brush = CreateSolidBrush(background);
+    FillRect(drawInfo->hDC, &drawInfo->rcItem, brush);
+    DeleteObject(brush);
+
+    SetBkMode(drawInfo->hDC, TRANSPARENT);
+    SetTextColor(drawInfo->hDC, kDarkMenuBarFg);
+    const HFONT oldFont = static_cast<HFONT>(SelectObject(
+        drawInfo->hDC, g_app.hUiFont ? g_app.hUiFont : GetStockObject(DEFAULT_GUI_FONT)));
+    DrawTextW(drawInfo->hDC, label, -1, &drawInfo->rcItem,
+              DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    SelectObject(drawInfo->hDC, oldFont);
+}
+
+void ApplyDwmWindowColors(HWND hwnd, bool enabled) {
+    const BOOL useDark = enabled ? TRUE : FALSE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, &useDark,
+                          sizeof(useDark));
+
+    const COLORREF border = enabled ? kDarkChromeBorder : kLightChromeBorder;
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+
+    const COLORREF captionBg = enabled ? kDarkTitleBarBg : kLightTitleBarBg;
+    const COLORREF captionFg = enabled ? kDarkEditorFg : kLightTitleBarFg;
+    DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &captionBg, sizeof(captionBg));
+    DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &captionFg, sizeof(captionFg));
+}
+
+void ApplyDarkModeToWindow(HWND hwnd, bool enabled) {
+    if (!hwnd) return;
+
+    if (g_uxtheme.allow_dark_mode_for_window) {
+        g_uxtheme.allow_dark_mode_for_window(hwnd, enabled ? TRUE : FALSE);
+    }
+
+    SetWindowTheme(hwnd, enabled ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    ApplyDwmWindowColors(hwnd, enabled);
+}
+
+LRESULT ThemedEditColorResult(HWND ctrl, HDC hdc) {
+    if (!g_app.hEditBrush) {
+        return 0;
+    }
+
+    wchar_t className[16] = {};
+    GetClassNameW(ctrl, className, static_cast<int>(std::size(className)));
+    if (_wcsicmp(className, L"Edit") != 0) {
+        return 0;
+    }
+
+    SetBkColor(hdc, g_app.editorBg);
+    SetTextColor(hdc, g_app.editorFg);
+    return reinterpret_cast<LRESULT>(g_app.hEditBrush);
+}
+
+int MenuItemWidth(int index) {
+    constexpr int widths[] = {72, 72, 96};
+    return widths[index];
+}
+
+RECT MenuItemRect(int index) {
+    RECT rc{0, 0, 0, 28};
+    for (int i = 0; i < index; ++i) {
+        rc.left += MenuItemWidth(i);
+    }
+    rc.right = rc.left + MenuItemWidth(index);
+    return rc;
+}
+
+int HitTestMenuBar(int x, int y) {
+    if (y < 0 || y >= 28) {
+        return -1;
+    }
+    for (int i = 0; i < 3; ++i) {
+        const RECT rc = MenuItemRect(i);
+        if (x >= rc.left && x < rc.right) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void ShowMenuBarPopup(HWND hwndMenuBar, int index) {
+    if (!g_app.hMenu || index < 0) {
+        return;
+    }
+
+    UpdateMenuState(g_app.hwndMain);
+
+    RECT rc = MenuItemRect(index);
+    POINT pt{rc.left, rc.bottom};
+    ClientToScreen(hwndMenuBar, &pt);
+
+    HMENU popup = GetSubMenu(g_app.hMenu, index);
+    if (!popup) {
+        return;
+    }
+
+    const UINT command = TrackPopupMenu(
+        popup,
+        TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
+        pt.x, pt.y, 0, g_app.hwndMain, nullptr);
+    if (command != 0) {
+        SendMessageW(g_app.hwndMain, WM_COMMAND, command, 0);
+    }
+}
+
+LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static int hovered = -1;
+
+    switch (msg) {
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT tme{};
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+
+            const int hit = HitTestMenuBar(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            if (hovered != hit) {
+                hovered = hit;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_MOUSELEAVE:
+            hovered = -1;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+
+        case WM_LBUTTONDOWN: {
+            const int hit = HitTestMenuBar(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            if (hit >= 0) {
+                hovered = hit;
+                InvalidateRect(hwnd, nullptr, FALSE);
+                ShowMenuBarPopup(hwnd, hit);
+            }
+            return 0;
+        }
+
+        case WM_ERASEBKGND:
+            return TRUE;
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+
+            HBRUSH background = CreateSolidBrush(kDarkMenuBarBg);
+            FillRect(hdc, &client, background);
+            DeleteObject(background);
+
+            const wchar_t* labels[] = {L"File", L"Edit", L"Format"};
+            const HFONT oldFont = static_cast<HFONT>(SelectObject(
+                hdc, g_app.hUiFont ? g_app.hUiFont : GetStockObject(DEFAULT_GUI_FONT)));
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, kDarkMenuBarFg);
+
+            for (int i = 0; i < 3; ++i) {
+                RECT item = MenuItemRect(i);
+                if (i == hovered) {
+                    HBRUSH hoverBrush = CreateSolidBrush(kDarkMenuBarHover);
+                    FillRect(hdc, &item, hoverBrush);
+                    DeleteObject(hoverBrush);
+                }
+                RECT textRect = item;
+                textRect.left += 26;
+                DrawTextW(hdc, labels[i], -1, &textRect,
+                          DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+            }
+
+            SelectObject(hdc, oldFont);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK StatusBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_ERASEBKGND:
+            return TRUE;
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+
+            HBRUSH background = CreateSolidBrush(kDarkStatusBg);
+            FillRect(hdc, &client, background);
+            DeleteObject(background);
+
+            const HPEN separatorPen = CreatePen(PS_SOLID, 1, RGB(45, 45, 45));
+            const HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, separatorPen));
+            const HFONT oldFont = static_cast<HFONT>(SelectObject(
+                hdc, g_app.hUiFont ? g_app.hUiFont : GetStockObject(DEFAULT_GUI_FONT)));
+
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(222, 222, 222));
+
+            int left = 0;
+            for (size_t i = 0; i < g_app.statusPartRight.size(); ++i) {
+                int right = g_app.statusPartRight[i];
+                if (right < 0) {
+                    right = client.right;
+                }
+                if (right <= left) {
+                    continue;
+                }
+
+                if (i > 0) {
+                    MoveToEx(hdc, left, 8, nullptr);
+                    LineTo(hdc, left, client.bottom - 6);
+                }
+
+                RECT textRect{left + 12, 0, right - 8, client.bottom};
+                DrawTextW(hdc, g_app.statusText[i].c_str(), -1, &textRect,
+                          DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+                left = right;
+            }
+
+            SelectObject(hdc, oldFont);
+            SelectObject(hdc, oldPen);
+            DeleteObject(separatorPen);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+    }
+
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
 
 enum class PasswordDialogMode { Open, Save };
 
@@ -30,9 +466,10 @@ struct PasswordDialogParams {
 namespace {
 
 constexpr int kStatusHeight = 24;
-constexpr int kDefaultEditorPointSize = 12;
-constexpr COLORREF kEditorBgColor = RGB(255, 255, 255);
-constexpr COLORREF kChromeBorderColor = RGB(225, 225, 225);
+constexpr int kDefaultEditorPointSize = 11;
+constexpr int kMinEditorPointSize = 8;
+constexpr int kMaxEditorPointSize = 72;
+constexpr UINT_PTR kEditorSubclassId = 1;
 
 int PointsToLogFontHeight(HWND hwnd, int pointSize) {
     const HDC hdc = GetDC(hwnd);
@@ -43,7 +480,8 @@ int PointsToLogFontHeight(HWND hwnd, int pointSize) {
 
 void InitDefaultEditorLogFont(HWND hwnd) {
     g_app.lf = LOGFONTW{};
-    g_app.lf.lfHeight = PointsToLogFontHeight(hwnd, kDefaultEditorPointSize);
+    g_app.editorPointSize = kDefaultEditorPointSize;
+    g_app.lf.lfHeight = PointsToLogFontHeight(hwnd, g_app.editorPointSize);
     g_app.lf.lfWeight = FW_NORMAL;
     g_app.lf.lfCharSet = DEFAULT_CHARSET;
     g_app.lf.lfQuality = CLEARTYPE_QUALITY;
@@ -113,13 +551,82 @@ int FindText(const std::wstring& haystack, const std::wstring& needle, bool matc
     return pos == std::wstring::npos ? -1 : static_cast<int>(pos);
 }
 
-void ApplyModernChrome(HWND hwnd) {
-    BOOL useDark = FALSE;
-    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
-    COLORREF border = kChromeBorderColor;
-    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
-    const int roundCorners = 2;
-    DwmSetWindowAttribute(hwnd, 33, &roundCorners, sizeof(roundCorners));
+void SetStatusBarParts(HWND hwnd) {
+    if (!g_app.hwndStatus) return;
+
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+
+    const int width = rc.right - rc.left;
+    const int encodingWidth = 150;
+    const int lineEndingWidth = 210;
+    const int zoomWidth = 90;
+    const int plainTextWidth = 240;
+    const int charWidth = 260;
+    const int cursorWidth = 120;
+
+    int parts[6]{};
+    parts[5] = -1;
+    parts[4] = width - encodingWidth;
+    parts[3] = parts[4] - lineEndingWidth;
+    parts[2] = parts[3] - zoomWidth;
+    parts[1] = cursorWidth + charWidth;
+    parts[0] = cursorWidth;
+
+    const int minimumMiddle = parts[1] + plainTextWidth;
+    if (parts[2] < minimumMiddle) {
+        parts[1] = std::min(parts[1], width / 2);
+        parts[2] = std::max(parts[1] + 120, parts[2]);
+    }
+
+    for (size_t i = 0; i < g_app.statusPartRight.size(); ++i) {
+        g_app.statusPartRight[i] = parts[i];
+    }
+    InvalidateRect(g_app.hwndStatus, nullptr, FALSE);
+}
+
+int CountDisplayCharacters(const std::wstring& text) {
+    return static_cast<int>(std::count_if(text.begin(), text.end(), [](wchar_t ch) {
+        return ch != L'\r';
+    }));
+}
+
+void ApplyEditorPointSize(HWND hwnd, int pointSize) {
+    g_app.editorPointSize = std::max(kMinEditorPointSize,
+                                     std::min(kMaxEditorPointSize, pointSize));
+    g_app.lf.lfHeight = PointsToLogFontHeight(hwnd, g_app.editorPointSize);
+    ApplyFont();
+    UpdateStatusBar();
+}
+
+LRESULT CALLBACK EditorSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+                                    UINT_PTR subclassId, DWORD_PTR refData) {
+    UNREFERENCED_PARAMETER(subclassId);
+    UNREFERENCED_PARAMETER(refData);
+
+    if (msg == WM_MOUSEWHEEL && (GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0) {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (delta != 0) {
+            ApplyEditorPointSize(GetParent(hwnd),
+                                 g_app.editorPointSize + (delta > 0 ? 1 : -1));
+        }
+        return 0;
+    }
+
+    const LRESULT result = DefSubclassProc(hwnd, msg, wParam, lParam);
+    switch (msg) {
+        case WM_KEYDOWN:
+        case WM_LBUTTONUP:
+        case WM_SETFOCUS:
+            UpdateStatusBar();
+            break;
+        case WM_MOUSEMOVE:
+            if ((wParam & MK_LBUTTON) != 0) {
+                UpdateStatusBar();
+            }
+            break;
+    }
+    return result;
 }
 
 HWND CreateEditorWindow(HWND parent) {
@@ -138,6 +645,7 @@ HWND CreateEditorWindow(HWND parent) {
     if (g_app.hFont) {
         SendMessageW(hwndEdit, WM_SETFONT, reinterpret_cast<WPARAM>(g_app.hFont), TRUE);
     }
+    SetWindowSubclass(hwndEdit, EditorSubclassProc, kEditorSubclassId, 0);
     return hwndEdit;
 }
 
@@ -147,6 +655,7 @@ BOOL CALLBACK SetChildFontProc(HWND child, LPARAM lParam) {
 }
 
 void ApplyUiFontToDialog(HWND hwnd) {
+    ApplyThemeToDialog(hwnd);
     if (!g_app.hUiFont) return;
     SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(g_app.hUiFont), TRUE);
     EnumChildWindows(hwnd, SetChildFontProc, reinterpret_cast<LPARAM>(g_app.hUiFont));
@@ -176,7 +685,7 @@ bool SaveEncryptedFile(const std::wstring& path, const std::wstring& text,
         error = zeronote::Utf8ToWide(err);
         return false;
     }
-    return zeronote::WriteFileBytes(path, encrypted);
+    return zeronote::WriteFileBytesAtomic(path, encrypted);
 }
 
 bool PromptPassword(HWND hwnd, PasswordDialogParams& params) {
@@ -199,17 +708,71 @@ bool LoadKeyfileBytes(const std::wstring& path, std::vector<uint8_t>& bytes, std
 }
 
 void CheckMenuItemById(HWND hwnd, UINT id, bool checked) {
-    HMENU menu = GetMenu(hwnd);
+    HMENU menu = g_app.hMenu ? g_app.hMenu : GetMenu(hwnd);
     if (!menu) return;
     CheckMenuItem(menu, id, MF_BYCOMMAND | (checked ? MF_CHECKED : MF_UNCHECKED));
 }
 
 void EnableMenuItemById(HWND hwnd, UINT id, bool enabled) {
-    HMENU menu = GetMenu(hwnd);
+    HMENU menu = g_app.hMenu ? g_app.hMenu : GetMenu(hwnd);
     if (!menu) return;
     EnableMenuItem(menu, id, MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
 }
 
+}
+
+void InitAppTheming() {
+    g_uxtheme.module = LoadLibraryW(L"uxtheme.dll");
+    if (!g_uxtheme.module) {
+        return;
+    }
+
+    g_uxtheme.allow_dark_mode_for_window = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(
+        GetProcAddress(g_uxtheme.module, MAKEINTRESOURCEA(133)));
+    g_uxtheme.set_preferred_app_mode = reinterpret_cast<BOOL(WINAPI*)(int)>(
+        GetProcAddress(g_uxtheme.module, MAKEINTRESOURCEA(135)));
+    g_uxtheme.should_apps_use_dark_mode = reinterpret_cast<BOOL(WINAPI*)()>(
+        GetProcAddress(g_uxtheme.module, MAKEINTRESOURCEA(132)));
+    g_uxtheme.flush_menu_themes = reinterpret_cast<BOOL(WINAPI*)()>(
+        GetProcAddress(g_uxtheme.module, MAKEINTRESOURCEA(136)));
+
+    if (g_uxtheme.set_preferred_app_mode) {
+        g_uxtheme.set_preferred_app_mode(2);
+    }
+}
+
+void ApplyAppTheme(HWND hwnd) {
+    g_app.darkMode = IsSystemDarkModeEnabled();
+    UpdateThemeBrushes();
+
+    ApplyDwmWindowColors(hwnd, g_app.darkMode);
+
+    const int roundCorners = 2;
+    DwmSetWindowAttribute(hwnd, 33, &roundCorners, sizeof(roundCorners));
+
+    if (g_uxtheme.flush_menu_themes) {
+        g_uxtheme.flush_menu_themes();
+    }
+
+    ApplyDarkModeToWindow(hwnd, g_app.darkMode);
+    ApplyMenuTheme(hwnd);
+
+    if (g_app.hwndStatus) {
+        InvalidateRect(g_app.hwndStatus, nullptr, TRUE);
+    }
+    if (g_app.hwndEdit) {
+        ApplyDarkModeToWindow(g_app.hwndEdit, g_app.darkMode);
+        InvalidateRect(g_app.hwndEdit, nullptr, TRUE);
+    }
+    if (g_app.hwndMenuBar) {
+        InvalidateRect(g_app.hwndMenuBar, nullptr, TRUE);
+    }
+
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+}
+
+void ApplyThemeToDialog(HWND hwnd) {
+    ApplyDarkModeToWindow(hwnd, g_app.darkMode);
 }
 
 void ClearEncryptionSession() {
@@ -226,7 +789,7 @@ void UpdateTitle(HWND hwnd) {
 }
 
 void UpdateStatusBar() {
-    if (!g_app.hwndStatus || g_app.wordWrap) return;
+    if (!g_app.hwndStatus) return;
 
     DWORD start = 0;
     DWORD end = 0;
@@ -240,27 +803,44 @@ void UpdateStatusBar() {
                         ? static_cast<int>(before.size()) + 1
                         : static_cast<int>(before.size() - lastNl);
 
-    wchar_t status[64];
-    swprintf_s(status, L"Ln %d, Col %d", line, col);
-    SendMessageW(g_app.hwndStatus, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(status));
+    wchar_t cursorStatus[64];
+    swprintf_s(cursorStatus, L"  Ln %d, Col %d", line, col);
+
+    wchar_t characterStatus[64];
+    swprintf_s(characterStatus, L"  %d characters", CountDisplayCharacters(text));
+
+    wchar_t zoomStatus[32];
+    swprintf_s(zoomStatus, L"  %d%%", MulDiv(g_app.editorPointSize, 100,
+                                             kDefaultEditorPointSize));
+
+    g_app.statusText[0] = cursorStatus;
+    g_app.statusText[1] = characterStatus;
+    g_app.statusText[2] = L"Plain text";
+    g_app.statusText[3] = zoomStatus;
+    g_app.statusText[4] = L"Windows (CRLF)";
+    g_app.statusText[5] = L"UTF-8";
+    InvalidateRect(g_app.hwndStatus, nullptr, FALSE);
 }
 
 void ResizeControls(HWND hwnd) {
     RECT rc{};
     GetClientRect(hwnd, &rc);
 
-    const int statusHeight = g_app.wordWrap ? 0 : kStatusHeight;
+    const int menuHeight = 28;
+    const int statusHeight = kStatusHeight;
+    if (g_app.hwndMenuBar) {
+        SetWindowPos(g_app.hwndMenuBar, nullptr, 0, 0, rc.right, menuHeight, SWP_NOZORDER);
+    }
     if (g_app.hwndStatus) {
-        ShowWindow(g_app.hwndStatus, g_app.wordWrap ? SW_HIDE : SW_SHOW);
-        if (!g_app.wordWrap) {
-            SetWindowPos(g_app.hwndStatus, nullptr, 0, rc.bottom - statusHeight,
-                         rc.right, statusHeight, SWP_NOZORDER);
-        }
+        ShowWindow(g_app.hwndStatus, SW_SHOW);
+        SetWindowPos(g_app.hwndStatus, nullptr, 0, rc.bottom - statusHeight,
+                     rc.right, statusHeight, SWP_NOZORDER);
+        SetStatusBarParts(hwnd);
     }
 
     if (g_app.hwndEdit) {
-        SetWindowPos(g_app.hwndEdit, nullptr, 0, 0, rc.right,
-                     rc.bottom - statusHeight, SWP_NOZORDER);
+        SetWindowPos(g_app.hwndEdit, nullptr, 0, menuHeight, rc.right,
+                     rc.bottom - statusHeight - menuHeight, SWP_NOZORDER);
     }
 }
 
@@ -701,6 +1281,16 @@ INT_PTR CALLBACK FindDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     return TRUE;
             }
             break;
+
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORSTATIC: {
+            const LRESULT result = ThemedEditColorResult(reinterpret_cast<HWND>(lParam),
+                                                         reinterpret_cast<HDC>(wParam));
+            if (result) {
+                return result;
+            }
+            break;
+        }
     }
     return FALSE;
 }
@@ -781,6 +1371,16 @@ INT_PTR CALLBACK ReplaceDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     return TRUE;
             }
             break;
+
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORSTATIC: {
+            const LRESULT result = ThemedEditColorResult(reinterpret_cast<HWND>(lParam),
+                                                         reinterpret_cast<HDC>(wParam));
+            if (result) {
+                return result;
+            }
+            break;
+        }
     }
     return FALSE;
 }
@@ -830,6 +1430,16 @@ INT_PTR CALLBACK GoToDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     return TRUE;
             }
             break;
+
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORSTATIC: {
+            const LRESULT result = ThemedEditColorResult(reinterpret_cast<HWND>(lParam),
+                                                         reinterpret_cast<HDC>(wParam));
+            if (result) {
+                return result;
+            }
+            break;
+        }
     }
     return FALSE;
 }
@@ -942,6 +1552,16 @@ INT_PTR CALLBACK PasswordDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     return TRUE;
             }
             break;
+
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORSTATIC: {
+            const LRESULT result = ThemedEditColorResult(reinterpret_cast<HWND>(lParam),
+                                                         reinterpret_cast<HDC>(wParam));
+            if (result) {
+                return result;
+            }
+            break;
+        }
     }
     return FALSE;
 }
@@ -950,31 +1570,51 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: {
             g_app.hwndMain = hwnd;
+            g_app.hMenu = GetMenu(hwnd);
+            SetMenu(hwnd, nullptr);
+
+            WNDCLASSEXW menuClass{};
+            menuClass.cbSize = sizeof(menuClass);
+            menuClass.lpfnWndProc = MenuBarProc;
+            menuClass.hInstance = g_app.hInstance;
+            menuClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            menuClass.lpszClassName = kMenuBarClassName;
+            RegisterClassExW(&menuClass);
+
+            WNDCLASSEXW statusClass{};
+            statusClass.cbSize = sizeof(statusClass);
+            statusClass.lpfnWndProc = StatusBarProc;
+            statusClass.hInstance = g_app.hInstance;
+            statusClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            statusClass.lpszClassName = kStatusBarClassName;
+            RegisterClassExW(&statusClass);
 
             INITCOMMONCONTROLSEX icc{};
             icc.dwSize = sizeof(icc);
             icc.dwICC = ICC_BAR_CLASSES;
             InitCommonControlsEx(&icc);
 
-            g_app.hEditBrush = CreateSolidBrush(kEditorBgColor);
             g_app.hUiFont = CreateFontW(
-                -12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                PointsToLogFontHeight(hwnd, 10), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
+
+            g_app.hwndMenuBar = CreateWindowExW(
+                0, kMenuBarClassName, nullptr,
+                WS_CHILD | WS_VISIBLE,
+                0, 0, 0, 0, hwnd, nullptr,
+                g_app.hInstance, nullptr);
 
             g_app.hwndStatus = CreateWindowExW(
-                0, STATUSCLASSNAMEW, nullptr,
+                0, kStatusBarClassName, nullptr,
                 WS_CHILD | WS_VISIBLE,
                 0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(IDC_STATUS),
                 g_app.hInstance, nullptr);
-            if (g_app.hUiFont) {
-                SendMessageW(g_app.hwndStatus, WM_SETFONT, reinterpret_cast<WPARAM>(g_app.hUiFont), TRUE);
-            }
 
             InitDefaultEditorLogFont(hwnd);
             g_app.hwndEdit = CreateEditorWindow(hwnd);
             ApplyFont();
-            ApplyModernChrome(hwnd);
+            ApplyAppTheme(hwnd);
 
             CheckMenuItemById(hwnd, IDM_FORMAT_WORDWRAP, g_app.wordWrap);
             ResizeControls(hwnd);
@@ -988,19 +1628,93 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             ResizeControls(hwnd);
             return 0;
 
+        case WM_MOUSEWHEEL:
+            if ((GET_KEYSTATE_WPARAM(wParam) & MK_CONTROL) != 0) {
+                const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                if (delta != 0) {
+                    ApplyEditorPointSize(hwnd,
+                                         g_app.editorPointSize + (delta > 0 ? 1 : -1));
+                }
+                return 0;
+            }
+            break;
+
+        case WM_ERASEBKGND: {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            HBRUSH brush = g_app.hEditBrush ? g_app.hEditBrush : GetSysColorBrush(COLOR_WINDOW);
+            FillRect(hdc, &rc, brush);
+            return TRUE;
+        }
+
         case WM_SETFOCUS:
             SetFocus(g_app.hwndEdit);
             return 0;
 
+        case WM_SETTINGCHANGE:
+            if (lParam != 0) {
+                const wchar_t* section = reinterpret_cast<const wchar_t*>(lParam);
+                if (wcscmp(section, L"ImmersiveColorSet") == 0 ||
+                    wcscmp(section, L"WindowsThemeElement") == 0) {
+                    ApplyAppTheme(hwnd);
+                }
+            }
+            return 0;
+
+        case WM_INITMENUPOPUP: {
+            HMENU popupMenu = reinterpret_cast<HMENU>(lParam);
+            if (g_app.darkMode && g_app.hMenuBrush && popupMenu) {
+                MENUINFO popupInfo{};
+                popupInfo.cbSize = sizeof(MENUINFO);
+                popupInfo.fMask = MIM_BACKGROUND | MIM_STYLE;
+                popupInfo.dwStyle = MNS_MODE_BACKGROUNDS;
+                popupInfo.hbrBack = g_app.hMenuBrush;
+                SetMenuInfo(popupMenu, &popupInfo);
+            }
+            break;
+        }
+
+        case WM_MEASUREITEM: {
+            auto* measureInfo = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            if (measureInfo->CtlType == ODT_MENU && g_app.darkMode) {
+                MeasureOwnerDrawMenuItem(hwnd, measureInfo);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_DRAWITEM: {
+            auto* drawInfo = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (drawInfo->CtlType == ODT_MENU && g_app.darkMode) {
+                DrawOwnerDrawMenuItem(hwnd, drawInfo);
+                return TRUE;
+            }
+            break;
+        }
+
         case WM_CTLCOLOREDIT: {
             HDC hdc = reinterpret_cast<HDC>(wParam);
-            SetBkColor(hdc, kEditorBgColor);
-            SetTextColor(hdc, RGB(0, 0, 0));
-            return reinterpret_cast<LRESULT>(g_app.hEditBrush);
+            const LRESULT result = ThemedEditColorResult(reinterpret_cast<HWND>(lParam), hdc);
+            if (result) {
+                return result;
+            }
+            break;
         }
 
         case WM_CTLCOLORSTATIC: {
+            const HWND ctrl = reinterpret_cast<HWND>(lParam);
             HDC hdc = reinterpret_cast<HDC>(wParam);
+            if (ctrl == g_app.hwndStatus && g_app.hStatusBrush) {
+                const COLORREF statusBg = g_app.darkMode ? kDarkStatusBg : kLightStatusBg;
+                SetBkColor(hdc, statusBg);
+                SetTextColor(hdc, g_app.darkMode ? kDarkEditorFg : kLightEditorFg);
+                return reinterpret_cast<LRESULT>(g_app.hStatusBrush);
+            }
+            const LRESULT result = ThemedEditColorResult(ctrl, hdc);
+            if (result) {
+                return result;
+            }
             SetBkColor(hdc, GetSysColor(COLOR_3DFACE));
             return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_3DFACE));
         }
@@ -1055,12 +1769,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_DESTROY:
             ClearEncryptionSession();
+            if (g_app.hMenu) DestroyMenu(g_app.hMenu);
             if (g_app.hFont) DeleteObject(g_app.hFont);
             if (g_app.hUiFont) DeleteObject(g_app.hUiFont);
             if (g_app.hEditBrush) DeleteObject(g_app.hEditBrush);
+            if (g_app.hStatusBrush) DeleteObject(g_app.hStatusBrush);
+            if (g_app.hMenuBrush) DeleteObject(g_app.hMenuBrush);
+            g_app.hMenu = nullptr;
             g_app.hFont = nullptr;
             g_app.hUiFont = nullptr;
             g_app.hEditBrush = nullptr;
+            g_app.hStatusBrush = nullptr;
+            g_app.hMenuBrush = nullptr;
             PostQuitMessage(0);
             return 0;
     }
