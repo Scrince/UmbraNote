@@ -2,6 +2,10 @@
 build/
 out/
 dist/
+assets/
+
+# Release signing keyring (secret material; mirrors YellowSphere /.gnupg-release/)
+/.gnupg-release/
 
 # Binaries and objects
 *.exe
@@ -18,6 +22,12 @@ dist/
 *.res
 UmbraNote
 UmbraNote.exe
+!releases/
+!releases/windows/
+!releases/windows/UmbraNote.exe
+!releases/windows/*.asc
+!docs/SHA256SUMS
+!docs/*.asc
 
 # CMake
 CMakeFiles/
