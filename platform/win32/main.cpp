@@ -7,6 +7,7 @@
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+    InitAppTheming();
 
     g_app.hInstance = hInstance;
     g_app.hAccel = LoadAcceleratorsW(hInstance, MAKEINTRESOURCEW(IDR_ACCEL));
@@ -20,7 +21,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     wcex.hInstance = hInstance;
     wcex.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wcex.hCursor = LoadCursorW(nullptr, IDC_IBEAM);
-    wcex.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wcex.hbrBackground = nullptr;
     wcex.lpszMenuName = MAKEINTRESOURCEW(IDR_MENU);
     wcex.lpszClassName = className;
     wcex.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
