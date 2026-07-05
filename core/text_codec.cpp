@@ -2,17 +2,86 @@
 
 #include <fstream>
 #include <iterator>
+#include <string>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace zeronote {
 
 namespace {
+
+#ifdef _WIN32
+bool WriteBytesAtomicImpl(const std::wstring& path, const std::vector<uint8_t>& bytes) {
+    const std::wstring temp = path + L".tmp";
+    HANDLE handle = CreateFileW(
+        temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    const BYTE* data = bytes.empty() ? nullptr : reinterpret_cast<const BYTE*>(bytes.data());
+    const DWORD total = static_cast<DWORD>(bytes.size());
+    DWORD written = 0;
+    const BOOL ok = WriteFile(handle, data, total, &written, nullptr);
+    if (!ok || written != total) {
+        CloseHandle(handle);
+        DeleteFileW(temp.c_str());
+        return false;
+    }
+    if (!FlushFileBuffers(handle)) {
+        CloseHandle(handle);
+        DeleteFileW(temp.c_str());
+        return false;
+    }
+    CloseHandle(handle);
+
+    if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(temp.c_str());
+        return false;
+    }
+    return true;
+}
+#else
+bool WriteBytesAtomicImpl(const std::string& path, const std::vector<uint8_t>& bytes) {
+    const std::string temp = path + ".tmp";
+    const int fd = open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return false;
+    }
+
+    std::size_t total = 0;
+    while (total < bytes.size()) {
+        const ssize_t chunk = write(
+            fd, bytes.data() + total, bytes.size() - total);
+        if (chunk <= 0) {
+            close(fd);
+            unlink(temp.c_str());
+            return false;
+        }
+        total += static_cast<std::size_t>(chunk);
+    }
+    if (fsync(fd) != 0) {
+        close(fd);
+        unlink(temp.c_str());
+        return false;
+    }
+    close(fd);
+
+    if (rename(temp.c_str(), path.c_str()) != 0) {
+        unlink(temp.c_str());
+        return false;
+    }
+    return true;
+}
+#endif
 
 bool Utf8FromBytes(const uint8_t* data, size_t size, std::string& out) {
     if (size == 0) {
@@ -159,6 +228,14 @@ bool WriteFileBytes(const std::string& path, const std::vector<uint8_t>& bytes) 
     return static_cast<bool>(file);
 }
 
+bool WriteFileBytesAtomic(const std::string& path, const std::vector<uint8_t>& bytes) {
+#ifndef _WIN32
+    return WriteBytesAtomicImpl(path, bytes);
+#else
+    return WriteBytesAtomicImpl(std::wstring(path.begin(), path.end()), bytes);
+#endif
+}
+
 bool DecodeTextFromBytes(const std::vector<uint8_t>& bytes, std::string& out) {
     if (bytes.empty()) {
         out.clear();
@@ -212,6 +289,10 @@ bool WriteFileBytes(const std::wstring& path, const std::vector<uint8_t>& bytes)
                    static_cast<std::streamsize>(bytes.size()));
     }
     return static_cast<bool>(file);
+}
+
+bool WriteFileBytesAtomic(const std::wstring& path, const std::vector<uint8_t>& bytes) {
+    return WriteBytesAtomicImpl(path, bytes);
 }
 
 bool SaveTextFileUtf8(const std::wstring& path, const std::string& text) {
