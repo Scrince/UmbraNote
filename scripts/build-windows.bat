@@ -27,7 +27,10 @@ nmake
 if errorlevel 1 exit /b 1
 
 copy /Y platform\win32\UmbraNote.exe ..\UmbraNote.exe >nul
+if not exist "%ROOT%\releases\windows" mkdir "%ROOT%\releases\windows"
+copy /Y platform\win32\UmbraNote.exe "%ROOT%\releases\windows\UmbraNote.exe" >nul
 echo.
 echo Build successful: %ROOT%\UmbraNote.exe
+echo Release binary: %ROOT%\releases\windows\UmbraNote.exe
 popd
 endlocal
