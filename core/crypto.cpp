@@ -375,7 +375,7 @@ bool GetEncryptedFileInfo(const std::vector<std::uint8_t>& data, EncryptedFileIn
     if (header.headerSize == 0) return false;
     info.version = header.version;
     info.requires_keyfile = false;
-    info.paranoid_kdf = header.version >= 2;
+    info.paranoid_kdf = false;
     return true;
 }
 
@@ -490,6 +490,78 @@ bool DecryptText(const std::vector<uint8_t>& data, const std::string& passwordUt
         error = "Decrypted data is invalid.";
         return false;
     }
+    return true;
+}
+
+bool EncryptLegacyV2ForTest(const std::string& plaintextUtf8, const std::string& passwordUtf8,
+                            const std::uint8_t* salt, const std::uint8_t* iv,
+                            std::vector<std::uint8_t>& output) {
+    if (!salt || !iv || passwordUtf8.empty()) return false;
+
+    const std::vector<uint8_t> passwordBytes(passwordUtf8.begin(), passwordUtf8.end());
+    uint8_t key[kKeySize]{};
+    if (!DeriveKeyPbkdf2(passwordBytes.data(), passwordBytes.size(),
+                         salt, kSaltSizeV2, kPbkdf2IterationsV2, key)) {
+        zeronote::SecureClear(key, sizeof(key));
+        return false;
+    }
+
+    std::vector<uint8_t> cipher(plaintextUtf8.size());
+    uint8_t tag[kTagSize]{};
+    const std::vector<uint8_t> aad = BuildAadV2(kPbkdf2IterationsV2);
+    const bool ok = AesGcmEncrypt(key, iv, aad.data(), aad.size(),
+                                  reinterpret_cast<const uint8_t*>(plaintextUtf8.data()),
+                                  plaintextUtf8.size(), cipher.data(), tag);
+    zeronote::SecureClear(key, sizeof(key));
+    if (!ok) return false;
+
+    output.resize(kMagicSize + 1 + 1 + 4 + kSaltSizeV2 + kIvSize + cipher.size() + kTagSize);
+    std::memcpy(output.data(), kMagicV2, kMagicSize);
+    output[kMagicSize] = kVersionV2;
+    output[kMagicSize + 1] = kKdfPbkdf2Sha256;
+    output[kMagicSize + 2] = static_cast<uint8_t>(kPbkdf2IterationsV2 & 0xFF);
+    output[kMagicSize + 3] = static_cast<uint8_t>((kPbkdf2IterationsV2 >> 8) & 0xFF);
+    output[kMagicSize + 4] = static_cast<uint8_t>((kPbkdf2IterationsV2 >> 16) & 0xFF);
+    output[kMagicSize + 5] = static_cast<uint8_t>((kPbkdf2IterationsV2 >> 24) & 0xFF);
+    std::memcpy(output.data() + kMagicSize + 6, salt, kSaltSizeV2);
+    std::memcpy(output.data() + kMagicSize + 6 + kSaltSizeV2, iv, kIvSize);
+    std::memcpy(output.data() + kMagicSize + 6 + kSaltSizeV2 + kIvSize,
+                cipher.data(), cipher.size());
+    std::memcpy(output.data() + kMagicSize + 6 + kSaltSizeV2 + kIvSize + cipher.size(),
+                tag, kTagSize);
+    return true;
+}
+
+bool EncryptLegacyV1ForTest(const std::string& plaintextUtf8, const std::string& passwordUtf8,
+                            const std::uint8_t* salt, const std::uint8_t* iv,
+                            std::vector<std::uint8_t>& output) {
+    if (!salt || !iv || passwordUtf8.empty()) return false;
+
+    const std::vector<uint8_t> passwordBytes(passwordUtf8.begin(), passwordUtf8.end());
+    uint8_t key[kKeySize]{};
+    if (!DeriveKeyPbkdf2(passwordBytes.data(), passwordBytes.size(),
+                         salt, kSaltSizeV1, kPbkdf2IterationsV1, key)) {
+        zeronote::SecureClear(key, sizeof(key));
+        return false;
+    }
+
+    std::vector<uint8_t> cipher(plaintextUtf8.size());
+    uint8_t tag[kTagSize]{};
+    const bool ok = AesGcmEncrypt(key, iv, nullptr, 0,
+                                  reinterpret_cast<const uint8_t*>(plaintextUtf8.data()),
+                                  plaintextUtf8.size(), cipher.data(), tag);
+    zeronote::SecureClear(key, sizeof(key));
+    if (!ok) return false;
+
+    output.resize(kMagicSize + 1 + kSaltSizeV1 + kIvSize + cipher.size() + kTagSize);
+    std::memcpy(output.data(), kMagicV1, kMagicSize);
+    output[kMagicSize] = kVersionV1;
+    std::memcpy(output.data() + kMagicSize + 1, salt, kSaltSizeV1);
+    std::memcpy(output.data() + kMagicSize + 1 + kSaltSizeV1, iv, kIvSize);
+    std::memcpy(output.data() + kMagicSize + 1 + kSaltSizeV1 + kIvSize,
+                cipher.data(), cipher.size());
+    std::memcpy(output.data() + kMagicSize + 1 + kSaltSizeV1 + kIvSize + cipher.size(),
+                tag, kTagSize);
     return true;
 }
 
