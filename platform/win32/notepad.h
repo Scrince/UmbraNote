@@ -12,16 +12,25 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <array>
 #include <string>
 
 struct AppState {
     HINSTANCE hInstance = nullptr;
     HWND hwndMain = nullptr;
+    HWND hwndMenuBar = nullptr;
     HWND hwndEdit = nullptr;
     HWND hwndStatus = nullptr;
+    HMENU hMenu = nullptr;
     HFONT hFont = nullptr;
     HFONT hUiFont = nullptr;
     HBRUSH hEditBrush = nullptr;
+    HBRUSH hStatusBrush = nullptr;
+    HBRUSH hMenuBrush = nullptr;
+    COLORREF editorBg = RGB(255, 255, 255);
+    COLORREF editorFg = RGB(0, 0, 0);
+    int editorPointSize = 11;
+    bool darkMode = false;
     LOGFONTW lf{};
     std::wstring filePath;
     bool modified = false;
@@ -32,9 +41,15 @@ struct AppState {
     bool encryptedRequiresKeyfile = false;
     bool encryptedParanoidKdf = true;
     HACCEL hAccel = nullptr;
+    std::array<int, 6> statusPartRight{};
+    std::array<std::wstring, 6> statusText{};
 };
 
 extern AppState g_app;
+
+void InitAppTheming();
+void ApplyAppTheme(HWND hwnd);
+void ApplyThemeToDialog(HWND hwnd);
 
 void UpdateTitle(HWND hwnd);
 void UpdateMenuState(HWND hwnd);
