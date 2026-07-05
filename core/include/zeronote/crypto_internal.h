@@ -15,4 +15,12 @@ bool DecryptTextV3(const std::vector<std::uint8_t>& data, const std::string& pas
                    std::string& plaintextUtf8, std::string& error,
                    const EncryptionOptions& options);
 
+bool EncryptLegacyV2ForTest(const std::string& plaintextUtf8, const std::string& passwordUtf8,
+                            const std::uint8_t* salt, const std::uint8_t* iv,
+                            std::vector<std::uint8_t>& output);
+
+bool EncryptLegacyV1ForTest(const std::string& plaintextUtf8, const std::string& passwordUtf8,
+                            const std::uint8_t* salt, const std::uint8_t* iv,
+                            std::vector<std::uint8_t>& output);
+
 }
