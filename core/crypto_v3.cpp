@@ -55,7 +55,7 @@ void GetKdfLimits(bool paranoid, std::uint32_t& opslimit, std::uint32_t& memlimi
 }
 
 bool BuildKdfInput(const std::string& passwordUtf8, const std::vector<std::uint8_t>& keyfile,
-                   SecureBuffer& out) {
+                   std::vector<std::uint8_t>& out) {
     if (passwordUtf8.empty()) return false;
     out.resize(passwordUtf8.size() + keyfile.size());
     if (!out.empty()) {
@@ -67,16 +67,20 @@ bool BuildKdfInput(const std::string& passwordUtf8, const std::vector<std::uint8
     return true;
 }
 
-bool DeriveKeyV3(const SecureBuffer& kdfInput, const std::uint8_t* salt,
+bool DeriveKeyV3(const std::uint8_t* kdfInput, std::size_t kdfInputSize, const std::uint8_t* salt,
                  std::uint32_t opslimit, std::uint32_t memlimit, SecureBuffer& keyOut) {
-    keyOut.resize(kKeySizeV3);
-    if (crypto_pwhash(keyOut.data(), keyOut.size(),
-                      reinterpret_cast<const char*>(kdfInput.data()), kdfInput.size(),
+    std::array<std::uint8_t, kKeySizeV3> keyTmp{};
+    if (crypto_pwhash(keyTmp.data(), keyTmp.size(),
+                      reinterpret_cast<const char*>(kdfInput), kdfInputSize,
                       salt, opslimit, memlimit,
                       crypto_pwhash_ALG_ARGON2ID13) != 0) {
+        sodium_memzero(keyTmp.data(), keyTmp.size());
         keyOut.clear();
         return false;
     }
+    keyOut.resize(kKeySizeV3);
+    std::memcpy(keyOut.data(), keyTmp.data(), keyTmp.size());
+    sodium_memzero(keyTmp.data(), keyTmp.size());
     return true;
 }
 
@@ -109,6 +113,36 @@ bool ParseV3Header(const std::vector<std::uint8_t>& data, V3Header& header) {
     std::memcpy(header.nonce.data(),
                 data.data() + kMagicSize + 11 + header.salt.size(),
                 header.nonce.size());
+    return true;
+}
+
+bool IsAllowedKdfParams(std::uint32_t opslimit, std::uint32_t memlimit) {
+    return (opslimit == crypto_pwhash_OPSLIMIT_SENSITIVE &&
+            memlimit == crypto_pwhash_MEMLIMIT_SENSITIVE) ||
+           (opslimit == crypto_pwhash_OPSLIMIT_MODERATE &&
+            memlimit == crypto_pwhash_MEMLIMIT_MODERATE);
+}
+
+bool IsConsistentHeaderFlags(std::uint8_t flags, std::uint32_t opslimit, std::uint32_t memlimit) {
+    const bool paranoid = (flags & kFlagParanoidKdf) != 0;
+    const bool sensitive = opslimit == crypto_pwhash_OPSLIMIT_SENSITIVE &&
+                           memlimit == crypto_pwhash_MEMLIMIT_SENSITIVE;
+    const bool moderate = opslimit == crypto_pwhash_OPSLIMIT_MODERATE &&
+                          memlimit == crypto_pwhash_MEMLIMIT_MODERATE;
+    return (paranoid && sensitive) || (!paranoid && moderate);
+}
+
+bool ValidateKeyfileForUse(const std::vector<std::uint8_t>& keyfile, bool usesKeyfileFlag,
+                         std::string& error) {
+    if (!usesKeyfileFlag && keyfile.empty()) return true;
+    if (usesKeyfileFlag && keyfile.size() < kMinKeyfileSize) {
+        error = "Keyfile must be at least 32 bytes.";
+        return false;
+    }
+    if (!keyfile.empty() && keyfile.size() < kMinKeyfileSize) {
+        error = "Keyfile must be at least 32 bytes.";
+        return false;
+    }
     return true;
 }
 
@@ -145,8 +179,12 @@ bool EncryptTextV3(const std::string& plaintextUtf8, const std::string& password
         error = "High-security encryption requires a keyfile in addition to the password.";
         return false;
     }
+    const bool usesKeyfile = !options.keyfile.empty();
+    if (!ValidateKeyfileForUse(options.keyfile, usesKeyfile, error)) {
+        return false;
+    }
 
-    SecureBuffer kdfInput;
+    std::vector<std::uint8_t> kdfInput;
     if (!BuildKdfInput(passwordUtf8, options.keyfile, kdfInput)) {
         error = "Failed to prepare key derivation input.";
         return false;
@@ -154,36 +192,37 @@ bool EncryptTextV3(const std::string& plaintextUtf8, const std::string& password
 
     V3Header header;
     header.flags = 0;
-    if (!options.keyfile.empty()) header.flags |= kFlagUsesKeyfile;
+    if (usesKeyfile) header.flags |= kFlagUsesKeyfile;
     if (options.paranoid_kdf) header.flags |= kFlagParanoidKdf;
     GetKdfLimits(options.paranoid_kdf, header.opslimit, header.memlimit);
     randombytes_buf(header.salt.data(), header.salt.size());
     randombytes_buf(header.nonce.data(), header.nonce.size());
 
     SecureBuffer key;
-    if (!DeriveKeyV3(kdfInput, header.salt.data(), header.opslimit, header.memlimit, key)) {
+    if (!DeriveKeyV3(kdfInput.data(), kdfInput.size(), header.salt.data(),
+                     header.opslimit, header.memlimit, key)) {
+        if (!kdfInput.empty()) {
+            sodium_memzero(kdfInput.data(), kdfInput.size());
+        }
         error = "Failed to derive encryption key.";
         return false;
+    }
+    if (!kdfInput.empty()) {
+        sodium_memzero(kdfInput.data(), kdfInput.size());
     }
     kdfInput.clear();
 
     std::vector<std::uint8_t> headerBytes;
     BuildHeaderBytes(header, headerBytes);
 
-    unsigned long long cipherLen = 0;
-    if (crypto_aead_xchacha20poly1305_ietf_encrypt(
-            nullptr, &cipherLen,
-            reinterpret_cast<const unsigned char*>(plaintextUtf8.data()),
-            plaintextUtf8.size(),
-            headerBytes.data(), headerBytes.size(),
-            nullptr, header.nonce.data(), key.data()) != 0) {
-        error = "Failed to size ciphertext.";
-        return false;
-    }
+    const unsigned long long cipherLen =
+        static_cast<unsigned long long>(plaintextUtf8.size()) +
+        crypto_aead_xchacha20poly1305_ietf_ABYTES;
 
     std::vector<std::uint8_t> cipher(static_cast<std::size_t>(cipherLen));
+    unsigned long long writtenLen = cipherLen;
     if (crypto_aead_xchacha20poly1305_ietf_encrypt(
-            cipher.data(), &cipherLen,
+            cipher.data(), &writtenLen,
             reinterpret_cast<const unsigned char*>(plaintextUtf8.data()),
             plaintextUtf8.size(),
             headerBytes.data(), headerBytes.size(),
@@ -193,9 +232,10 @@ bool EncryptTextV3(const std::string& plaintextUtf8, const std::string& password
     }
 
     output.clear();
-    output.reserve(headerBytes.size() + cipher.size());
+    output.reserve(headerBytes.size() + static_cast<std::size_t>(writtenLen));
     output.insert(output.end(), headerBytes.begin(), headerBytes.end());
-    output.insert(output.end(), cipher.begin(), cipher.begin() + static_cast<std::ptrdiff_t>(cipherLen));
+    output.insert(output.end(), cipher.begin(),
+                  cipher.begin() + static_cast<std::ptrdiff_t>(writtenLen));
     return true;
 }
 
@@ -218,21 +258,39 @@ bool DecryptTextV3(const std::vector<std::uint8_t>& data, const std::string& pas
         error = "This file requires the original keyfile.";
         return false;
     }
+    if (!ValidateKeyfileForUse(options.keyfile, requiresKeyfile, error)) {
+        return false;
+    }
     if (passwordUtf8.empty()) {
         error = "Password cannot be empty.";
         return false;
     }
+    if (!IsAllowedKdfParams(header.opslimit, header.memlimit)) {
+        error = "Encrypted file is corrupt.";
+        return false;
+    }
+    if (!IsConsistentHeaderFlags(header.flags, header.opslimit, header.memlimit)) {
+        error = "Encrypted file is corrupt.";
+        return false;
+    }
 
-    SecureBuffer kdfInput;
+    std::vector<std::uint8_t> kdfInput;
     if (!BuildKdfInput(passwordUtf8, options.keyfile, kdfInput)) {
         error = "Failed to prepare key derivation input.";
         return false;
     }
 
     SecureBuffer key;
-    if (!DeriveKeyV3(kdfInput, header.salt.data(), header.opslimit, header.memlimit, key)) {
+    if (!DeriveKeyV3(kdfInput.data(), kdfInput.size(), header.salt.data(),
+                     header.opslimit, header.memlimit, key)) {
+        if (!kdfInput.empty()) {
+            sodium_memzero(kdfInput.data(), kdfInput.size());
+        }
         error = "Failed to derive decryption key.";
         return false;
+    }
+    if (!kdfInput.empty()) {
+        sodium_memzero(kdfInput.data(), kdfInput.size());
     }
     kdfInput.clear();
 
@@ -241,20 +299,19 @@ bool DecryptTextV3(const std::vector<std::uint8_t>& data, const std::string& pas
 
     const std::uint8_t* cipher = data.data() + kHeaderSizeV3;
     const std::size_t cipherSize = data.size() - kHeaderSizeV3;
-    unsigned long long plainLen = 0;
-    if (crypto_aead_xchacha20poly1305_ietf_decrypt(
-            nullptr, &plainLen,
-            nullptr,
-            cipher, cipherSize,
-            headerBytes.data(), headerBytes.size(),
-            header.nonce.data(), key.data()) != 0) {
+    if (cipherSize < crypto_aead_xchacha20poly1305_ietf_ABYTES) {
         error = "Incorrect password, keyfile, or corrupted file.";
         return false;
     }
 
+    const unsigned long long plainLen =
+        static_cast<unsigned long long>(cipherSize) -
+        crypto_aead_xchacha20poly1305_ietf_ABYTES;
+
     std::vector<std::uint8_t> plain(static_cast<std::size_t>(plainLen));
+    unsigned long long writtenLen = plainLen;
     if (crypto_aead_xchacha20poly1305_ietf_decrypt(
-            plain.data(), &plainLen,
+            plain.data(), &writtenLen,
             nullptr,
             cipher, cipherSize,
             headerBytes.data(), headerBytes.size(),
@@ -264,7 +321,7 @@ bool DecryptTextV3(const std::vector<std::uint8_t>& data, const std::string& pas
     }
 
     plaintextUtf8.assign(reinterpret_cast<const char*>(plain.data()),
-                         static_cast<std::size_t>(plainLen));
+                         static_cast<std::size_t>(writtenLen));
     sodium_memzero(plain.data(), plain.size());
     return true;
 }
