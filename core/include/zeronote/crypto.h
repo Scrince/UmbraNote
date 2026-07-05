@@ -8,6 +8,7 @@ namespace zeronote::crypto {
 
 constexpr std::size_t kMinPasswordLengthStandard = 12;
 constexpr std::size_t kMinPasswordLengthParanoid = 20;
+constexpr std::size_t kMinKeyfileSize = 32;
 
 constexpr std::uint8_t kFlagUsesKeyfile = 0x01;
 constexpr std::uint8_t kFlagParanoidKdf = 0x02;
