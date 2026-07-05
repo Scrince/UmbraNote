@@ -65,7 +65,39 @@ Equivalent script:
 scripts\build-windows.bat
 ```
 
-Output: `UmbraNote.exe` in the repository root.
+Output: `UmbraNote.exe` in the repository root and `releases/windows/UmbraNote.exe`.
+
+### Sign a Windows release (PGP)
+
+After building, sign release artifacts in the same detached ASCII-armored format used by YellowSphere:
+
+```bat
+scripts\sign-release.bat
+```
+
+Create the UmbraNote release key once (private key stored in gitignored `.gnupg-release/`):
+
+```bat
+scripts\init-release-key.bat
+```
+
+Then sign:
+
+```bat
+scripts\sign-release.bat
+```
+
+This writes `releases/windows/UmbraNote.exe.asc`, `docs/SHA256SUMS`, `docs/SHA256SUMS.asc`, and `docs/UmbraNote_Release_Signing_2026_pubkey.asc`.
+
+Verify:
+
+```bash
+gpg --import docs/UmbraNote_Release_Signing_2026_pubkey.asc
+gpg --verify docs/SHA256SUMS.asc docs/SHA256SUMS
+gpg --verify releases/windows/UmbraNote.exe.asc releases/windows/UmbraNote.exe
+```
+
+See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) for key storage layout and fingerprint.
 
 ### Linux (recommended)
 
@@ -125,6 +157,7 @@ UmbraNote/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # GitHub Actions build matrix
+├── assets/                     # Local/generated assets (gitignored)
 ├── core/
 │   ├── include/zeronote/       # Public core headers
 │   ├── crypto.cpp              # AES-256-GCM + PBKDF2
