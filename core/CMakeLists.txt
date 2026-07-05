@@ -26,11 +26,25 @@ else()
     FetchContent_Declare(
         libsodium_cmake
         GIT_REPOSITORY https://github.com/robinlinden/libsodium-cmake.git
-        GIT_TAG 2257eb3f9539c281d662b0a606ecf37d8e590ca0
+        GIT_TAG 9b2848dfc1b917a9410f0de9d81059b26cbfaa8d
     )
     set(SODIUM_DISABLE_TESTS ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(libsodium_cmake)
     if(TARGET sodium)
+        if(MSVC)
+            set(_chacha_stream_file
+                "${libsodium_cmake_SOURCE_DIR}/libsodium/src/libsodium/crypto_stream/chacha20/stream_chacha20.c")
+            if(EXISTS "${_chacha_stream_file}")
+                file(READ "${_chacha_stream_file}" _chacha_stream_content)
+                string(REPLACE "if (sodium_runtime_has_avx2()) {"
+                               "if (0 /* UmbraNote: MSVC ref-only chacha */) {"
+                       _chacha_stream_content "${_chacha_stream_content}")
+                string(REPLACE "if (sodium_runtime_has_ssse3()) {"
+                               "if (0 /* UmbraNote: MSVC ref-only chacha */) {"
+                       _chacha_stream_content "${_chacha_stream_content}")
+                file(WRITE "${_chacha_stream_file}" "${_chacha_stream_content}")
+            endif()
+        endif()
         target_link_libraries(zeronote_core PUBLIC sodium)
     else()
         message(FATAL_ERROR "libsodium CMake target not found. Install libsodium or ensure Git is available.")
