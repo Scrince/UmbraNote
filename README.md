@@ -2,11 +2,6 @@
 
 UmbraNote is a small native text editor written in modern C++. It keeps the familiar shape of a desktop notepad while adding encrypted notes, UTF-aware text loading, PDF export, and a portable core that can be shared across platform frontends.
 
-![CI](https://github.com/YOUR_USERNAME/UmbraNote/actions/workflows/ci.yml/badge.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
-![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
-
 ## Features
 
 - Native editor UI with New, Open, Save, Find, Replace, Go To, Word Wrap, font selection, printing, and line/column status
