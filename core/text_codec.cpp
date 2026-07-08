@@ -232,7 +232,7 @@ bool WriteFileBytesAtomic(const std::string& path, const std::vector<uint8_t>& b
 #ifndef _WIN32
     return WriteBytesAtomicImpl(path, bytes);
 #else
-    return WriteBytesAtomicImpl(std::wstring(path.begin(), path.end()), bytes);
+    return WriteBytesAtomicImpl(Utf8ToWide(path), bytes);
 #endif
 }
 
