@@ -76,6 +76,9 @@ void SecureBuffer::resize(std::size_t size) {
         SecureClear(bytes_.data(), bytes_.size());
     }
     bytes_.resize(size);
+    if (!bytes_.empty()) {
+        locked_ = LockMemory(bytes_.data(), bytes_.size());
+    }
 }
 
 void SecureBuffer::clear() {
