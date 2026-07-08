@@ -37,10 +37,10 @@ else()
             if(EXISTS "${_chacha_stream_file}")
                 file(READ "${_chacha_stream_file}" _chacha_stream_content)
                 string(REPLACE "if (sodium_runtime_has_avx2()) {"
-                               "if (0 /* UmbraNote: MSVC ref-only chacha */) {"
+                               "if (0) {"
                        _chacha_stream_content "${_chacha_stream_content}")
                 string(REPLACE "if (sodium_runtime_has_ssse3()) {"
-                               "if (0 /* UmbraNote: MSVC ref-only chacha */) {"
+                               "if (0) {"
                        _chacha_stream_content "${_chacha_stream_content}")
                 file(WRITE "${_chacha_stream_file}" "${_chacha_stream_content}")
             endif()
