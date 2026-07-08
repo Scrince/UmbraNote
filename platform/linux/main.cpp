@@ -292,6 +292,23 @@ bool SaveEncryptedFile(const std::string& path, const std::string& text,
     return zeronote::WriteFileBytesAtomic(path, encrypted);
 }
 
+bool VerifyExistingEncryptedFile(const std::string& path, const PasswordDialogParams& auth,
+                                 std::string& error) {
+    std::vector<uint8_t> bytes;
+    if (!zeronote::ReadFileBytes(path, bytes)) {
+        error = "Cannot read the encrypted file before saving.";
+        return false;
+    }
+    std::string plaintext;
+    std::string err;
+    if (!zeronote::crypto::DecryptText(bytes, auth.password, plaintext, err,
+                                       BuildEncryptionOptions(auth))) {
+        error = err.empty() ? "Password or keyfile does not match this file." : err;
+        return false;
+    }
+    return true;
+}
+
 void OnBufferChanged(GtkTextBuffer*, gpointer) {
     if (!g_app.modified) {
         SetModified(true);
@@ -401,6 +418,11 @@ void OnSave(GtkButton*, gpointer) {
         }
 
         std::string error;
+        if (!VerifyExistingEncryptedFile(g_app.filePath, auth, error)) {
+            ShowError(error.empty() ? "Password or keyfile does not match this file."
+                                    : error.c_str());
+            return;
+        }
         if (!SaveEncryptedFile(g_app.filePath, GetEditorText(), auth, error)) {
             ShowError(error.empty() ? "Cannot save the encrypted file." : error.c_str());
             return;
