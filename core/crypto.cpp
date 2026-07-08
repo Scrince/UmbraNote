@@ -247,6 +247,10 @@ bool AesGcmDecrypt(const uint8_t* key, const uint8_t* iv,
 #endif
 
 bool Utf8FromWideStorage(const std::vector<uint8_t>& bytes, std::string& out) {
+    if (bytes.empty()) {
+        out.clear();
+        return true;
+    }
     if (bytes.size() < 2) return false;
 
     const auto b0 = static_cast<unsigned char>(bytes[0]);
@@ -446,7 +450,7 @@ bool DecryptText(const std::vector<uint8_t>& data, const std::string& passwordUt
 
     const EncryptedHeader header = ParseHeader(data);
     const size_t cipherSize = data.size() - header.headerSize - kTagSize;
-    if (header.headerSize == 0 || cipherSize == 0) {
+    if (header.headerSize == 0) {
         error = "Encrypted file is corrupt.";
         return false;
     }
