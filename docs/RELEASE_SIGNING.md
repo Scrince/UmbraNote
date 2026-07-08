@@ -78,3 +78,27 @@ sha256sum -c docs/SHA256SUMS
 ```
 
 PGP signatures confirm release integrity against the UmbraNote release key. They do not provide Windows Authenticode publisher trust.
+
+## Local code-signing certificate
+
+UmbraNote also includes the public half of a local Windows Authenticode test certificate:
+
+```text
+docs/UmbraNote_Local_Code_Signing_2026.cer
+```
+
+Certificate identity:
+
+```text
+CN=UmbraNote Local Code Signing
+Thumbprint: AA9B590FB698EBFD1651F14D2576602F01039FAB
+Valid: 2026-07-04 to 2028-07-04
+```
+
+The certificate file is safe to publish and can be imported by testers who need to trust local test-signed builds. The private key remains in the local Windows certificate store and must not be committed.
+
+Inspect the certificate:
+
+```bat
+certutil -dump docs\UmbraNote_Local_Code_Signing_2026.cer
+```
