@@ -688,6 +688,25 @@ bool SaveEncryptedFile(const std::wstring& path, const std::wstring& text,
     return zeronote::WriteFileBytesAtomic(path, encrypted);
 }
 
+bool VerifyExistingEncryptedFile(const std::wstring& path, const PasswordDialogParams& auth,
+                                 std::wstring& error) {
+    std::vector<uint8_t> bytes;
+    if (!zeronote::ReadFileBytes(path, bytes)) {
+        error = L"Cannot read the encrypted file before saving.";
+        return false;
+    }
+    std::string plaintext;
+    std::string err;
+    if (!zeronote::crypto::DecryptText(bytes, zeronote::WideToUtf8(auth.password),
+                                       plaintext, err, BuildEncryptionOptions(auth))) {
+        error = zeronote::Utf8ToWide(err.empty()
+                                         ? "Password or keyfile does not match this file."
+                                         : err);
+        return false;
+    }
+    return true;
+}
+
 bool PromptPassword(HWND hwnd, PasswordDialogParams& params) {
     const INT_PTR result = DialogBoxParamW(
         g_app.hInstance, MAKEINTRESOURCEW(IDD_PASSWORD), hwnd, PasswordDlgProc,
@@ -1020,6 +1039,12 @@ bool DoFileSave(HWND hwnd) {
         }
 
         std::wstring error;
+        if (!VerifyExistingEncryptedFile(g_app.filePath, auth, error)) {
+            MessageBoxW(hwnd, error.empty() ? L"Password or keyfile does not match this file."
+                                            : error.c_str(),
+                        L"UmbraNote", MB_OK | MB_ICONERROR);
+            return false;
+        }
         if (!SaveEncryptedFile(g_app.filePath, GetEditText(), auth, error)) {
             MessageBoxW(hwnd, error.empty() ? L"Cannot save the encrypted file." : error.c_str(),
                         L"UmbraNote", MB_OK | MB_ICONERROR);
