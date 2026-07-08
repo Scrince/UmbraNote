@@ -241,6 +241,31 @@ TEST_CASE("legacy v2 round-trip via test encrypt helper", "[crypto][legacy]") {
     REQUIRE(plaintext == kFixturePlaintext);
 }
 
+TEST_CASE("legacy encrypted empty notes decrypt as empty text", "[crypto][legacy]") {
+    const auto saltV2 = FixedSaltV2();
+    const auto saltV1 = FixedSaltV1();
+    const auto iv = FixedIv();
+
+    std::vector<std::uint8_t> encryptedV2;
+    REQUIRE(zeronote::crypto::EncryptLegacyV2ForTest(
+        "", kLegacyPassword, saltV2.data(), iv.data(), encryptedV2));
+
+    std::string plaintext;
+    std::string error;
+    REQUIRE(zeronote::crypto::DecryptText(encryptedV2, kLegacyPassword, plaintext, error));
+    REQUIRE(error.empty());
+    REQUIRE(plaintext.empty());
+
+    std::vector<std::uint8_t> encryptedV1;
+    REQUIRE(zeronote::crypto::EncryptLegacyV1ForTest(
+        "", kLegacyPassword, saltV1.data(), iv.data(), encryptedV1));
+
+    plaintext = "not empty";
+    REQUIRE(zeronote::crypto::DecryptText(encryptedV1, kLegacyPassword, plaintext, error));
+    REQUIRE(error.empty());
+    REQUIRE(plaintext.empty());
+}
+
 TEST_CASE("GetEncryptedFileInfo legacy v2 has paranoid_kdf false", "[crypto][info]") {
     const auto salt = FixedSaltV2();
     const auto iv = FixedIv();
