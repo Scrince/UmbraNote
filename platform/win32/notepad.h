@@ -62,6 +62,7 @@ void SyncModifiedFromEdit();
 
 bool ConfirmSaveIfNeeded(HWND hwnd);
 void DoFileNew(HWND hwnd);
+bool OpenFilePath(HWND hwnd, const std::wstring& path);
 void DoFileOpen(HWND hwnd);
 bool DoFileSave(HWND hwnd);
 bool DoFileSaveAs(HWND hwnd);

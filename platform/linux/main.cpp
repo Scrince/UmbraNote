@@ -1,5 +1,6 @@
 #include <zeronote/crypto.h>
 #include <zeronote/pdf_export.h>
+#include <zeronote/secure_memory.h>
 #include <zeronote/text_codec.h>
 
 #include <gtk/gtk.h>
@@ -133,7 +134,7 @@ void OnPasswordDialogResponse(GtkDialog* dialog, int response, gpointer user_dat
     result.mode = widgets->params->mode;
     result.require_keyfile = widgets->params->require_keyfile;
     result.paranoid_kdf =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(widgets->paranoid)) != FALSE;
+        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widgets->paranoid)) != FALSE;
 
     const char* passwordText = gtk_entry_get_text(GTK_ENTRY(widgets->password));
     result.password = passwordText ? passwordText : "";
@@ -253,7 +254,7 @@ bool PromptPassword(PasswordDialogParams& params) {
 
     widgets.paranoid = gtk_check_button_new_with_label(
         "High-security mode (Argon2id + keyfile required)");
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(widgets.paranoid), params.paranoid_kdf);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widgets.paranoid), params.paranoid_kdf);
     if (params.mode == PasswordDialogMode::Open) {
         gtk_widget_set_sensitive(widgets.paranoid, FALSE);
     }
@@ -262,7 +263,7 @@ bool PromptPassword(PasswordDialogParams& params) {
     GtkWidget* hint = gtk_label_new(
         "Uses XChaCha20-Poly1305, Argon2id, and re-auth on save.");
     gtk_widget_set_halign(hint, GTK_ALIGN_START);
-    gtk_label_set_wrap(GTK_LABEL(hint), TRUE);
+    gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE);
     gtk_grid_attach(GTK_GRID(grid), hint, 0, 4, 3, 1);
 
     gtk_dialog_add_button(GTK_DIALOG(widgets.dialog), "_Cancel", GTK_RESPONSE_CANCEL);
@@ -281,32 +282,37 @@ bool PromptPassword(PasswordDialogParams& params) {
 }
 
 bool SaveEncryptedFile(const std::string& path, const std::string& text,
-                       const PasswordDialogParams& auth, std::string& error) {
+                       PasswordDialogParams& auth, std::string& error) {
     std::vector<uint8_t> encrypted;
     std::string err;
-    if (!zeronote::crypto::EncryptText(text, auth.password, encrypted, err,
-                                       BuildEncryptionOptions(auth))) {
+    const bool ok = zeronote::crypto::EncryptText(text, auth.password, encrypted, err,
+                                                  BuildEncryptionOptions(auth));
+    zeronote::SecureClearString(auth.password);
+    if (!ok) {
         error = err;
         return false;
     }
     return zeronote::WriteFileBytesAtomic(path, encrypted);
 }
 
-bool VerifyExistingEncryptedFile(const std::string& path, const PasswordDialogParams& auth,
-                                 std::string& error) {
+bool VerifyEncryptedFileAuth(const std::string& path, PasswordDialogParams& auth,
+                             std::string& error) {
+    
     std::vector<uint8_t> bytes;
     if (!zeronote::ReadFileBytes(path, bytes)) {
         error = "Cannot read the encrypted file before saving.";
         return false;
     }
-    std::string plaintext;
-    std::string err;
-    if (!zeronote::crypto::DecryptText(bytes, auth.password, plaintext, err,
-                                       BuildEncryptionOptions(auth))) {
-        error = err.empty() ? "Password or keyfile does not match this file." : err;
+    if (!zeronote::crypto::IsEncryptedFile(bytes)) {
+        error = "The file on disk is no longer an UmbraNote encrypted note.";
         return false;
     }
-    return true;
+
+    std::string plaintext;
+    const bool ok = zeronote::crypto::DecryptText(bytes, auth.password, plaintext, error,
+                                                  BuildEncryptionOptions(auth));
+    zeronote::SecureClearString(plaintext);
+    return ok;
 }
 
 void OnBufferChanged(GtkTextBuffer*, gpointer) {
@@ -329,11 +335,32 @@ void OnOpen(GtkButton*, gpointer) {
     GtkWidget* dialog = gtk_file_chooser_dialog_new(
         "Open File", GTK_WINDOW(g_app.window), GTK_FILE_CHOOSER_ACTION_OPEN,
         "_Cancel", GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, nullptr);
-    GtkFileFilter* filter = gtk_file_filter_new();
-    gtk_file_filter_set_name(filter, "Supported");
-    gtk_file_filter_add_pattern(filter, "*.txt");
-    gtk_file_filter_add_pattern(filter, "*.zro");
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+
+    
+    GtkFileFilter* all_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(all_filter, "All Files");
+    gtk_file_filter_add_pattern(all_filter, "*");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), all_filter);
+
+    GtkFileFilter* text_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(text_filter, "Text Documents");
+    gtk_file_filter_add_pattern(text_filter, "*.txt");
+    gtk_file_filter_add_pattern(text_filter, "*.text");
+    gtk_file_filter_add_pattern(text_filter, "*.log");
+    gtk_file_filter_add_pattern(text_filter, "*.md");
+    gtk_file_filter_add_pattern(text_filter, "*.csv");
+    gtk_file_filter_add_pattern(text_filter, "*.json");
+    gtk_file_filter_add_pattern(text_filter, "*.xml");
+    gtk_file_filter_add_pattern(text_filter, "*.ini");
+    gtk_file_filter_add_pattern(text_filter, "*.cfg");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), text_filter);
+
+    GtkFileFilter* zro_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(zro_filter, "Encrypted Notes");
+    gtk_file_filter_add_pattern(zro_filter, "*.zro");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), zro_filter);
+
+    gtk_file_chooser_set_filter(GTK_FILE_CHOOSER(dialog), all_filter);
 
     if (gtk_dialog_run(GTK_DIALOG(dialog)) != GTK_RESPONSE_ACCEPT) {
         gtk_widget_destroy(dialog);
@@ -369,14 +396,18 @@ void OnOpen(GtkButton*, gpointer) {
 
         std::string plainUtf8;
         std::string error;
-        if (!zeronote::crypto::DecryptText(bytes, auth.password, plainUtf8, error,
-                                           BuildEncryptionOptions(auth))) {
+        const bool decrypted = zeronote::crypto::DecryptText(bytes, auth.password, plainUtf8, error,
+                                                             BuildEncryptionOptions(auth));
+        zeronote::SecureClearString(auth.password);
+        if (!decrypted) {
+            zeronote::SecureClearString(plainUtf8);
             ShowError(error.c_str());
             g_free(path);
             return;
         }
 
         content = plainUtf8;
+        zeronote::SecureClearString(plainUtf8);
         g_app.fileEncrypted = true;
         g_app.encryptedRequiresKeyfile = info.requires_keyfile;
         g_app.encryptedParanoidKdf = info.paranoid_kdf;
@@ -402,6 +433,8 @@ bool SavePlainFile(const std::string& path) {
     return true;
 }
 
+void OnSaveAs(GtkButton*, gpointer);
+
 void OnSave(GtkButton*, gpointer) {
     if (g_app.filePath.empty()) {
         OnSaveAs(nullptr, nullptr);
@@ -418,11 +451,12 @@ void OnSave(GtkButton*, gpointer) {
         }
 
         std::string error;
-        if (!VerifyExistingEncryptedFile(g_app.filePath, auth, error)) {
-            ShowError(error.empty() ? "Password or keyfile does not match this file."
-                                    : error.c_str());
+        if (!VerifyEncryptedFileAuth(g_app.filePath, auth, error)) {
+            zeronote::SecureClearString(auth.password);
+            ShowError(error.empty() ? "Cannot verify the encrypted file password." : error.c_str());
             return;
         }
+        
         if (!SaveEncryptedFile(g_app.filePath, GetEditorText(), auth, error)) {
             ShowError(error.empty() ? "Cannot save the encrypted file." : error.c_str());
             return;
@@ -531,8 +565,8 @@ void OnExportPdf(GtkButton*, gpointer) {
     g_free(path);
 }
 
-void OnWordWrap(GtkCheckButton* button, gpointer) {
-    g_app.wordWrap = gtk_check_button_get_active(GTK_CHECK_BUTTON(button)) != FALSE;
+void OnWordWrap(GtkToggleButton* button, gpointer) {
+    g_app.wordWrap = gtk_toggle_button_get_active(button) != FALSE;
     gtk_text_view_set_wrap_mode(
         GTK_TEXT_VIEW(g_app.text_view),
         g_app.wordWrap ? GTK_WRAP_WORD : GTK_WRAP_NONE);
@@ -575,7 +609,7 @@ int main(int argc, char* argv[]) {
     gtk_box_pack_start(GTK_BOX(toolbar), CreateMenuButton("Export PDF", G_CALLBACK(OnExportPdf)), FALSE, FALSE, 0);
 
     GtkWidget* wrap = gtk_check_button_new_with_label("Word Wrap");
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(wrap), TRUE);
     g_signal_connect(wrap, "toggled", G_CALLBACK(OnWordWrap), nullptr);
     gtk_box_pack_start(GTK_BOX(toolbar), wrap, FALSE, FALSE, 0);
 

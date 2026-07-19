@@ -19,6 +19,7 @@ endif()
 
 if(LIBSODIUM_FOUND)
     target_include_directories(zeronote_core PUBLIC ${LIBSODIUM_INCLUDE_DIRS})
+    target_link_directories(zeronote_core PUBLIC ${LIBSODIUM_LIBRARY_DIRS})
     target_link_libraries(zeronote_core PUBLIC ${LIBSODIUM_LIBRARIES})
     target_compile_options(zeronote_core PUBLIC ${LIBSODIUM_CFLAGS_OTHER})
 else()
@@ -37,10 +38,10 @@ else()
             if(EXISTS "${_chacha_stream_file}")
                 file(READ "${_chacha_stream_file}" _chacha_stream_content)
                 string(REPLACE "if (sodium_runtime_has_avx2()) {"
-                               "if (0) {"
+                               "if (0 /* UmbraNote: MSVC ref-only chacha */) {"
                        _chacha_stream_content "${_chacha_stream_content}")
                 string(REPLACE "if (sodium_runtime_has_ssse3()) {"
-                               "if (0) {"
+                               "if (0 /* UmbraNote: MSVC ref-only chacha */) {"
                        _chacha_stream_content "${_chacha_stream_content}")
                 file(WRITE "${_chacha_stream_file}" "${_chacha_stream_content}")
             endif()

@@ -5,7 +5,7 @@ add_executable(UmbraNote WIN32
 )
 
 target_include_directories(UmbraNote PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(UmbraNote PRIVATE zeronote_core comctl32 comdlg32 dwmapi shcore)
+target_link_libraries(UmbraNote PRIVATE zeronote_core comctl32 comdlg32 dwmapi shell32 shcore)
 
 if(MSVC)
     target_compile_options(UmbraNote PRIVATE /W4 /utf-8)

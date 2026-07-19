@@ -247,10 +247,6 @@ bool AesGcmDecrypt(const uint8_t* key, const uint8_t* iv,
 #endif
 
 bool Utf8FromWideStorage(const std::vector<uint8_t>& bytes, std::string& out) {
-    if (bytes.empty()) {
-        out.clear();
-        return true;
-    }
     if (bytes.size() < 2) return false;
 
     const auto b0 = static_cast<unsigned char>(bytes[0]);
@@ -321,11 +317,18 @@ EncryptedHeader ParseHeader(const std::vector<uint8_t>& data) {
         if (data.size() < kMagicSize + 1 + 1 + 4 + kSaltSizeV2 + kIvSize + kTagSize) {
             return header;
         }
+        if (data[kMagicSize] != kVersionV2 || data[kMagicSize + 1] != kKdfPbkdf2Sha256) {
+            return header;
+        }
+        const uint32_t iterations = static_cast<uint32_t>(data[kMagicSize + 2]) |
+                                    (static_cast<uint32_t>(data[kMagicSize + 3]) << 8) |
+                                    (static_cast<uint32_t>(data[kMagicSize + 4]) << 16) |
+                                    (static_cast<uint32_t>(data[kMagicSize + 5]) << 24);
+        if (iterations != kPbkdf2IterationsV2) {
+            return header;
+        }
         header.version = 2;
-        header.iterations = static_cast<uint32_t>(data[kMagicSize + 2]) |
-                            (static_cast<uint32_t>(data[kMagicSize + 3]) << 8) |
-                            (static_cast<uint32_t>(data[kMagicSize + 4]) << 16) |
-                            (static_cast<uint32_t>(data[kMagicSize + 5]) << 24);
+        header.iterations = iterations;
         header.saltSize = kSaltSizeV2;
         header.headerSize = kMagicSize + 1 + 1 + 4 + kSaltSizeV2 + kIvSize;
         return header;
@@ -450,7 +453,7 @@ bool DecryptText(const std::vector<uint8_t>& data, const std::string& passwordUt
 
     const EncryptedHeader header = ParseHeader(data);
     const size_t cipherSize = data.size() - header.headerSize - kTagSize;
-    if (header.headerSize == 0) {
+    if (header.headerSize == 0 || cipherSize == 0) {
         error = "Encrypted file is corrupt.";
         return false;
     }

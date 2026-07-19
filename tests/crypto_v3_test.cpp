@@ -1,5 +1,6 @@
 #include <zeronote/crypto.h>
 #include <zeronote/crypto_internal.h>
+#include <zeronote/text_codec.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -12,6 +13,11 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -241,29 +247,27 @@ TEST_CASE("legacy v2 round-trip via test encrypt helper", "[crypto][legacy]") {
     REQUIRE(plaintext == kFixturePlaintext);
 }
 
-TEST_CASE("legacy encrypted empty notes decrypt as empty text", "[crypto][legacy]") {
-    const auto saltV2 = FixedSaltV2();
-    const auto saltV1 = FixedSaltV1();
+TEST_CASE("legacy v2 rejects unexpected KDF parameters before derivation", "[crypto][legacy]") {
+    const auto salt = FixedSaltV2();
     const auto iv = FixedIv();
-
-    std::vector<std::uint8_t> encryptedV2;
+    std::vector<std::uint8_t> encrypted;
     REQUIRE(zeronote::crypto::EncryptLegacyV2ForTest(
-        "", kLegacyPassword, saltV2.data(), iv.data(), encryptedV2));
+        kFixturePlaintext, kLegacyPassword, salt.data(), iv.data(), encrypted));
 
+    encrypted[7] = 0x7F;
+    encrypted[10] = 0xFF;
+    encrypted[11] = 0xFF;
+    encrypted[12] = 0xFF;
+    encrypted[13] = 0xFF;
+
+    const auto start = std::chrono::steady_clock::now();
     std::string plaintext;
     std::string error;
-    REQUIRE(zeronote::crypto::DecryptText(encryptedV2, kLegacyPassword, plaintext, error));
-    REQUIRE(error.empty());
-    REQUIRE(plaintext.empty());
-
-    std::vector<std::uint8_t> encryptedV1;
-    REQUIRE(zeronote::crypto::EncryptLegacyV1ForTest(
-        "", kLegacyPassword, saltV1.data(), iv.data(), encryptedV1));
-
-    plaintext = "not empty";
-    REQUIRE(zeronote::crypto::DecryptText(encryptedV1, kLegacyPassword, plaintext, error));
-    REQUIRE(error.empty());
-    REQUIRE(plaintext.empty());
+    REQUIRE_FALSE(zeronote::crypto::DecryptText(
+        encrypted, kLegacyPassword, plaintext, error));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    REQUIRE(error == "File is not an UmbraNote encrypted note.");
+    REQUIRE(elapsed < std::chrono::seconds(2));
 }
 
 TEST_CASE("GetEncryptedFileInfo legacy v2 has paranoid_kdf false", "[crypto][info]") {
@@ -309,3 +313,25 @@ TEST_CASE("golden fixtures match deterministic test encrypt output", "[crypto][f
         kFixturePlaintext, kLegacyPassword, saltV1.data(), iv.data(), v1Generated));
     REQUIRE(BytesToHex(v1Generated) == BytesToHex(LoadFixtureHex("v1_golden.hex")));
 }
+
+#ifndef _WIN32
+TEST_CASE("atomic binary write preserves existing file mode", "[io]") {
+    char path[] = "/tmp/umbranote-mode-XXXXXX";
+    const int fd = mkstemp(path);
+    REQUIRE(fd >= 0);
+    close(fd);
+
+    REQUIRE(chmod(path, S_IRUSR | S_IWUSR) == 0);
+    const std::vector<std::uint8_t> bytes = {'o', 'k'};
+    REQUIRE(zeronote::WriteFileBytesAtomic(path, bytes));
+
+    struct stat after {};
+    REQUIRE(stat(path, &after) == 0);
+    REQUIRE((after.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO)) == (S_IRUSR | S_IWUSR));
+
+    std::vector<std::uint8_t> readBack;
+    REQUIRE(zeronote::ReadFileBytes(path, readBack));
+    REQUIRE(readBack == bytes);
+    unlink(path);
+}
+#endif

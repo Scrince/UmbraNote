@@ -21,7 +21,15 @@ export GNUPGHOME="$GNUPG_HOME"
 
 RELEASE_KEY_ID="${RELEASE_KEY_ID:-}"
 if [[ -z "$RELEASE_KEY_ID" ]]; then
-    RELEASE_KEY_ID="$("$GPG_BIN" --list-secret-keys --keyid-format long | awk '/^sec/ {print $2}' | cut -d/ -f2 | head -1)"
+    
+    RELEASE_KEY_ID="$("$GPG_BIN" --list-secret-keys --with-colons \
+        | awk -F: '
+            $1 == "ssb" && $12 ~ /s/ { print $5; exit }
+          ')"
+fi
+if [[ -z "$RELEASE_KEY_ID" ]]; then
+    RELEASE_KEY_ID="$("$GPG_BIN" --list-secret-keys --keyid-format long \
+        | awk '/^sec/ {print $2}' | cut -d/ -f2 | head -1)"
 fi
 if [[ -z "$RELEASE_KEY_ID" ]]; then
     echo "No release signing secret key found in $GNUPG_HOME" >&2

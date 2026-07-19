@@ -1,8 +1,10 @@
 #include "notepad.h"
 #include "resource.h"
 
+#include <shellapi.h>
 #include <shellscalingapi.h>
 
+#pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "shcore.lib")
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
@@ -19,12 +21,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     wcex.style = CS_HREDRAW | CS_VREDRAW;
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
-    wcex.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wcex.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_ZERONOTE));
     wcex.hCursor = LoadCursorW(nullptr, IDC_IBEAM);
     wcex.hbrBackground = nullptr;
     wcex.lpszMenuName = MAKEINTRESOURCEW(IDR_MENU);
     wcex.lpszClassName = className;
-    wcex.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
+    wcex.hIconSm = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_ZERONOTE));
 
     if (!RegisterClassExW(&wcex)) {
         MessageBoxW(nullptr, L"Failed to register window class.", L"UmbraNote",
@@ -46,6 +48,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
+
+    int argc = 0;
+    PWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv && argc > 1) {
+        OpenFilePath(hwnd, argv[1]);
+    }
+    if (argv) {
+        LocalFree(argv);
+    }
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0)) {

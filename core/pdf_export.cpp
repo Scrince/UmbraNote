@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <cstdint>
 #include <fstream>
-#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -134,166 +133,6 @@ bool LoadFontBytes(std::vector<uint8_t>& bytes) {
     return false;
 }
 
-uint16_t ReadBe16(const std::vector<uint8_t>& bytes, size_t offset) {
-    if (offset + 2 > bytes.size()) return 0;
-    return static_cast<uint16_t>((bytes[offset] << 8) | bytes[offset + 1]);
-}
-
-uint32_t ReadBe32(const std::vector<uint8_t>& bytes, size_t offset) {
-    if (offset + 4 > bytes.size()) return 0;
-    return (static_cast<uint32_t>(bytes[offset]) << 24) |
-           (static_cast<uint32_t>(bytes[offset + 1]) << 16) |
-           (static_cast<uint32_t>(bytes[offset + 2]) << 8) |
-           static_cast<uint32_t>(bytes[offset + 3]);
-}
-
-bool FindTable(const std::vector<uint8_t>& fontBytes, const char tag[4],
-               size_t& offset, size_t& length) {
-    if (fontBytes.size() < 12) return false;
-    const uint16_t tableCount = ReadBe16(fontBytes, 4);
-    size_t record = 12;
-    for (uint16_t i = 0; i < tableCount && record + 16 <= fontBytes.size(); ++i) {
-        if (fontBytes[record] == static_cast<uint8_t>(tag[0]) &&
-            fontBytes[record + 1] == static_cast<uint8_t>(tag[1]) &&
-            fontBytes[record + 2] == static_cast<uint8_t>(tag[2]) &&
-            fontBytes[record + 3] == static_cast<uint8_t>(tag[3])) {
-            offset = ReadBe32(fontBytes, record + 8);
-            length = ReadBe32(fontBytes, record + 12);
-            return offset <= fontBytes.size() && length <= fontBytes.size() - offset;
-        }
-        record += 16;
-    }
-    return false;
-}
-
-uint16_t GlyphFromFormat4(const std::vector<uint8_t>& fontBytes, size_t subtable,
-                          uint32_t codepoint) {
-    if (codepoint > 0xFFFF || subtable + 16 > fontBytes.size()) return 0;
-    const uint16_t segCount = ReadBe16(fontBytes, subtable + 6) / 2;
-    const size_t endCodes = subtable + 14;
-    const size_t startCodes = endCodes + static_cast<size_t>(segCount) * 2 + 2;
-    const size_t idDeltas = startCodes + static_cast<size_t>(segCount) * 2;
-    const size_t idRangeOffsets = idDeltas + static_cast<size_t>(segCount) * 2;
-    if (idRangeOffsets + static_cast<size_t>(segCount) * 2 > fontBytes.size()) return 0;
-
-    for (uint16_t i = 0; i < segCount; ++i) {
-        const uint16_t endCode = ReadBe16(fontBytes, endCodes + static_cast<size_t>(i) * 2);
-        const uint16_t startCode = ReadBe16(fontBytes, startCodes + static_cast<size_t>(i) * 2);
-        if (codepoint < startCode || codepoint > endCode) continue;
-
-        const uint16_t rangeOffset = ReadBe16(fontBytes, idRangeOffsets + static_cast<size_t>(i) * 2);
-        const int16_t delta = static_cast<int16_t>(
-            ReadBe16(fontBytes, idDeltas + static_cast<size_t>(i) * 2));
-        uint16_t glyph = 0;
-        if (rangeOffset == 0) {
-            glyph = static_cast<uint16_t>((codepoint + delta) & 0xFFFF);
-        } else {
-            const size_t glyphOffset = idRangeOffsets + static_cast<size_t>(i) * 2 +
-                rangeOffset + static_cast<size_t>(codepoint - startCode) * 2;
-            if (glyphOffset + 2 > fontBytes.size()) return 0;
-            glyph = ReadBe16(fontBytes, glyphOffset);
-            if (glyph != 0) {
-                glyph = static_cast<uint16_t>((glyph + delta) & 0xFFFF);
-            }
-        }
-        return glyph;
-    }
-    return 0;
-}
-
-uint16_t GlyphFromFormat12(const std::vector<uint8_t>& fontBytes, size_t subtable,
-                           uint32_t codepoint) {
-    if (subtable + 16 > fontBytes.size()) return 0;
-    const uint32_t groupCount = ReadBe32(fontBytes, subtable + 12);
-    size_t group = subtable + 16;
-    for (uint32_t i = 0; i < groupCount && group + 12 <= fontBytes.size(); ++i) {
-        const uint32_t startCode = ReadBe32(fontBytes, group);
-        const uint32_t endCode = ReadBe32(fontBytes, group + 4);
-        const uint32_t startGlyph = ReadBe32(fontBytes, group + 8);
-        if (codepoint >= startCode && codepoint <= endCode) {
-            const uint32_t glyph = startGlyph + (codepoint - startCode);
-            return glyph <= 0xFFFF ? static_cast<uint16_t>(glyph) : 0;
-        }
-        group += 12;
-    }
-    return 0;
-}
-
-struct CmapSubtables {
-    size_t format4 = 0;
-    size_t format12 = 0;
-};
-
-CmapSubtables FindUnicodeCmaps(const std::vector<uint8_t>& fontBytes) {
-    CmapSubtables subtables;
-    size_t cmapOffset = 0;
-    size_t cmapLength = 0;
-    if (!FindTable(fontBytes, "cmap", cmapOffset, cmapLength) || cmapLength < 4) {
-        return subtables;
-    }
-
-    const uint16_t encodingCount = ReadBe16(fontBytes, cmapOffset + 2);
-    size_t record = cmapOffset + 4;
-    for (uint16_t i = 0; i < encodingCount && record + 8 <= fontBytes.size(); ++i) {
-        const uint16_t platformId = ReadBe16(fontBytes, record);
-        const uint16_t encodingId = ReadBe16(fontBytes, record + 2);
-        const uint32_t subOffset = ReadBe32(fontBytes, record + 4);
-        const size_t subtable = cmapOffset + subOffset;
-        if (subtable + 2 <= fontBytes.size() && subOffset < cmapLength) {
-            const uint16_t format = ReadBe16(fontBytes, subtable);
-            const bool unicodeEncoding =
-                platformId == 0 || (platformId == 3 && (encodingId == 1 || encodingId == 10));
-            if (unicodeEncoding && format == 4 && subtables.format4 == 0) {
-                subtables.format4 = subtable;
-            } else if (unicodeEncoding && format == 12 && subtables.format12 == 0) {
-                subtables.format12 = subtable;
-            }
-        }
-        record += 8;
-    }
-    return subtables;
-}
-
-uint16_t GlyphForCodepoint(const std::vector<uint8_t>& fontBytes, const CmapSubtables& subtables,
-                           uint32_t codepoint) {
-    if (subtables.format12 != 0) {
-        const uint16_t glyph = GlyphFromFormat12(fontBytes, subtables.format12, codepoint);
-        if (glyph != 0) return glyph;
-    }
-    if (subtables.format4 != 0) {
-        return GlyphFromFormat4(fontBytes, subtables.format4, codepoint);
-    }
-    return 0;
-}
-
-std::set<uint32_t> CollectPdfCodeUnits(const std::string& text) {
-    std::set<uint32_t> codes;
-    size_t index = 0;
-    while (index < text.size()) {
-        uint32_t cp = DecodeUtf8Codepoint(text, index);
-        if (cp == '\r' || cp == '\n') continue;
-        if (cp > 0xFFFF) cp = 0xFFFD;
-        codes.insert(cp);
-    }
-    return codes;
-}
-
-std::string BuildCidToGidMap(const std::vector<uint8_t>& fontBytes,
-                             const std::set<uint32_t>& codes) {
-    if (codes.empty()) return std::string(2, '\0');
-    const CmapSubtables subtables = FindUnicodeCmaps(fontBytes);
-    const uint32_t maxCode = std::min<uint32_t>(*codes.rbegin(), 0xFFFF);
-    std::string map;
-    map.assign(static_cast<size_t>(maxCode + 1) * 2, '\0');
-    for (uint32_t code : codes) {
-        if (code > maxCode) continue;
-        const uint16_t glyph = GlyphForCodepoint(fontBytes, subtables, code);
-        map[static_cast<size_t>(code) * 2] = static_cast<char>((glyph >> 8) & 0xFF);
-        map[static_cast<size_t>(code) * 2 + 1] = static_cast<char>(glyph & 0xFF);
-    }
-    return map;
-}
-
 std::vector<std::string> SplitLines(const std::string& text) {
     std::vector<std::string> lines;
     std::string current;
@@ -374,13 +213,21 @@ std::string EscapePdfLiteral(const std::string& text) {
 void AppendUtf16BeHex(const std::string& text, std::string& hex) {
     size_t i = 0;
     while (i < text.size()) {
-        uint32_t cp = DecodeUtf8Codepoint(text, i);
-        if (cp > 0xFFFF) {
-            cp = 0xFFFD;
+        const uint32_t cp = DecodeUtf8Codepoint(text, i);
+        if (cp <= 0xFFFF) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%04X", static_cast<unsigned int>(cp));
+            hex += buf;
+        } else {
+            const uint32_t value = cp - 0x10000;
+            const uint16_t high = static_cast<uint16_t>(0xD800 + (value >> 10));
+            const uint16_t low = static_cast<uint16_t>(0xDC00 + (value & 0x3FF));
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%04X%04X",
+                          static_cast<unsigned int>(high),
+                          static_cast<unsigned int>(low));
+            hex += buf;
         }
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "%04X", static_cast<unsigned int>(cp));
-        hex += buf;
     }
 }
 
@@ -393,18 +240,11 @@ std::string BuildUnicodeTextOperator(const std::string& line) {
     if (line.empty()) return "T*";
     std::string hex;
     AppendUtf16BeHex(line, hex);
-    return "<" + hex + "> Tj T*";
+    return "<FEFF" + hex + "> Tj T*";
 }
 
-std::string HexCode(uint32_t code) {
-    char buf[8];
-    std::snprintf(buf, sizeof(buf), "<%04X>", static_cast<unsigned int>(code & 0xFFFF));
-    return buf;
-}
-
-std::string BuildToUnicodeCMap(const std::set<uint32_t>& codes) {
-    std::ostringstream cmap;
-    cmap << R"(/CIDInit /ProcSet findresource begin
+std::string BuildToUnicodeCMap() {
+    return R"(/CIDInit /ProcSet findresource begin
 12 dict begin
 begincmap
 /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
@@ -413,25 +253,10 @@ begincmap
 1 begincodespacerange
 <0000> <FFFF>
 endcodespacerange
-)";
-
-    auto it = codes.begin();
-    while (it != codes.end()) {
-        const size_t emitted = static_cast<size_t>(std::distance(codes.begin(), it));
-        const size_t count = std::min<size_t>(codes.size() - emitted, 100);
-        cmap << count << " beginbfchar\n";
-        for (size_t i = 0; i < count && it != codes.end(); ++i, ++it) {
-            const std::string hex = HexCode(*it);
-            cmap << hex << " " << hex << "\n";
-        }
-        cmap << "endbfchar\n";
-    }
-
-    cmap << R"(endcmap
+endcmap
 CMapName currentdict /CMap defineresource pop
 end
 end)";
-    return cmap.str();
 }
 
 }
@@ -459,7 +284,7 @@ bool ExportTextToPdf(const std::string& utf8Text, const std::string& path,
         pages.push_back({""});
     }
 
-    const int fontBlockSize = needsUnicode ? 6 : 1;
+    const int fontBlockSize = needsUnicode ? 5 : 1;
     const int firstFontId = 3 + static_cast<int>(pages.size() * 2);
     std::vector<std::string> bodies;
     bodies.resize(static_cast<size_t>(firstFontId + fontBlockSize - 1));
@@ -509,10 +334,7 @@ bool ExportTextToPdf(const std::string& utf8Text, const std::string& path,
         const int cidFontId = firstFontId + 1;
         const int fontDescriptorId = firstFontId + 2;
         const int fontFileId = firstFontId + 3;
-        const int cidToGidId = firstFontId + 4;
-        const int toUnicodeId = firstFontId + 5;
-        const std::set<uint32_t> pdfCodes = CollectPdfCodeUnits(utf8Text);
-        const std::string cidToGid = BuildCidToGidMap(fontBytes, pdfCodes);
+        const int toUnicodeId = firstFontId + 4;
 
         std::ostringstream fontStream;
         fontStream.write(reinterpret_cast<const char*>(fontBytes.data()),
@@ -532,7 +354,7 @@ bool ExportTextToPdf(const std::string& utf8Text, const std::string& path,
             "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /UmbraNoteUnicode "
             "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
             "/FontDescriptor " + std::to_string(fontDescriptorId) + " 0 R "
-            "/CIDToGIDMap " + std::to_string(cidToGidId) + " 0 R /DW 1000 >>";
+            "/CIDToGIDMap /Identity /DW 1000 >>";
 
         bodies[static_cast<size_t>(type0Id - 1)] =
             "<< /Type /Font /Subtype /Type0 /BaseFont /UmbraNoteUnicode "
@@ -540,11 +362,7 @@ bool ExportTextToPdf(const std::string& utf8Text, const std::string& path,
             std::to_string(cidFontId) + " 0 R] "
             "/ToUnicode " + std::to_string(toUnicodeId) + " 0 R >>";
 
-        bodies[static_cast<size_t>(cidToGidId - 1)] =
-            "<< /Length " + std::to_string(cidToGid.size()) +
-            " >>\nstream\n" + cidToGid + "\nendstream";
-
-        const std::string cmap = BuildToUnicodeCMap(pdfCodes);
+        const std::string cmap = BuildToUnicodeCMap();
         bodies[static_cast<size_t>(toUnicodeId - 1)] =
             "<< /Length " + std::to_string(cmap.size()) + " >>\nstream\n" + cmap +
             "\nendstream";

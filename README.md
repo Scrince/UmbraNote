@@ -1,32 +1,28 @@
 # UmbraNote
 
-UmbraNote is a small native text editor written in modern C++. It keeps the familiar shape of a desktop notepad while adding encrypted notes, UTF-aware text loading, PDF export, and a portable core that can be shared across platform frontends.
+A lightweight, cross-platform text editor written in modern C++. UmbraNote feels familiar like Windows Notepad, with optional encrypted notes, PDF export, and a clean native UI on Windows and Linux.
 
-## Features
+![CI](https://github.com/YOUR_USERNAME/UmbraNote/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
+![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 
-- Native editor UI with New, Open, Save, Find, Replace, Go To, Word Wrap, font selection, printing, and line/column status
-- Plain text files saved as UTF-8 without a BOM
-- Automatic opening of UTF-8 and UTF-16 LE/BE text files
-- Encrypted `.zro` notes using the current ZNENC3 format for new saves
-- Legacy `.zro` read support for ZNENC1 and ZNENC2 files
-- PDF export with line wrapping and pagination
-- Shared `core/` library for text encoding, cryptography, secure memory helpers, and PDF writing
-- Native Win32 frontend and GTK4-based Linux frontend
+## Highlights
 
-## Encryption at a glance
+- **Familiar editing** — New, Open, Save, Find/Replace, Go To, Word Wrap, Font picker, and status bar line/column display
+- **Open any text-like file** — Notepad-style open dialog (All Files by default) with auto-detect for UTF-8, UTF-16, and system ANSI
+- **UTF-8 by default** — Plain text files are saved as UTF-8 without BOM
+- **Encrypted notes** — High-security `.zro` files using Argon2id + XChaCha20-Poly1305, optional keyfile, and legacy v1/v2 support
+- **PDF export** — Export the current document to PDF from the File menu
+- **Cross-platform core** — Shared `core/` library with native Win32 and GTK4 frontends
+- **libsodium** — Memory-hard Argon2id and modern AEAD for v3 encryption (bundled at build time if missing)
 
-New encrypted notes use ZNENC3:
+## Screenshots
 
-- Argon2id key derivation through libsodium
-- XChaCha20-Poly1305 authenticated encryption
-- Random 32-byte salt and 24-byte nonce per file
-- Full fixed header authenticated as additional data
-- Optional keyfile support, with high-security mode requiring password plus keyfile
-- Best-effort locked and zeroed memory for derived keys and KDF inputs
-
-ZNENC1 and ZNENC2 remain readable for compatibility. Re-save old encrypted notes with "Save Encrypted As" to move them to the current format.
-
-No local editor can protect plaintext on a compromised machine. UmbraNote encryption is focused on files at rest, especially stolen or copied `.zro` files. See [docs/SECURITY.md](docs/SECURITY.md) and [docs/FILE_FORMATS.md](docs/FILE_FORMATS.md) for details.
+> Add screenshots after your first GitHub release:
+>
+> `docs/screenshots/windows-editor.png`
+> `docs/screenshots/linux-editor.png`
 
 ## Quick start
 
@@ -51,104 +47,96 @@ chmod +x build.sh
 
 ## Requirements
 
-| Platform | Required tools | Libraries |
-| --- | --- | --- |
-| Windows 10+ | Visual Studio 2022 Build Tools or Visual Studio 2022 with the C++ workload, CMake 3.16+, Git | BCrypt from Windows; libsodium is fetched by CMake when not installed |
-| Linux | GCC or Clang with C++17, CMake 3.16+, pkg-config | GTK4, OpenSSL, libsodium |
-
-Example Ubuntu dependencies:
-
-```bash
-sudo apt update
-sudo apt install build-essential cmake pkg-config libgtk-4-dev libssl-dev libsodium-dev
-```
+| Platform | Toolchain | Libraries |
+|----------|-----------|-----------|
+| Windows 10+ | Visual Studio 2022 Build Tools or VS 2022 with C++ workload | CMake 3.16+, Git (first build fetches libsodium if needed) |
+| Linux | GCC or Clang with C++17 | CMake 3.16+, OpenSSL (`libssl-dev`), GTK4 (`libgtk-4-dev`), libsodium (`libsodium-dev`) |
 
 ## Build
 
-Use the top-level wrappers for normal local builds:
+### Windows (recommended)
 
 ```bat
 build.bat
 ```
 
-```bash
-./build.sh
-```
-
-The platform scripts are available directly too:
+Equivalent script:
 
 ```bat
 scripts\build-windows.bat
 ```
 
-```bash
-./scripts/build-linux.sh
-```
+Output: `UmbraNote.exe` in the repository root and `releases/windows/UmbraNote.exe`.
 
-Build outputs:
+### Sign a Windows release (PGP)
 
-| Platform | Main output | Release copy |
-| --- | --- | --- |
-| Windows | `UmbraNote.exe` | `releases/windows/UmbraNote.exe` |
-| Linux | `UmbraNote` | none by default |
-
-Manual CMake build:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-
-## Tests
-
-Tests are enabled by default through CMake:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-ctest --test-dir build --output-on-failure
-```
-
-The current test target covers the crypto layer and fixture compatibility. Catch2 is fetched by CMake for the test build.
-
-## Release signing
-
-Windows release artifacts can be signed with detached PGP signatures:
+After building, sign release artifacts in the same detached ASCII-armored format used by YellowSphere:
 
 ```bat
-scripts\build-windows.bat
 scripts\sign-release.bat
 ```
 
-One-time release key setup:
+Create the UmbraNote release key once (private key stored in gitignored `.gnupg-release/`):
 
 ```bat
 scripts\init-release-key.bat
 ```
 
-Generated release files include:
+Then sign:
 
-- `releases/windows/UmbraNote.exe`
-- `releases/windows/UmbraNote.exe.asc`
-- `docs/SHA256SUMS`
-- `docs/SHA256SUMS.asc`
-- `docs/UmbraNote_Release_Signing_2026_pubkey.asc`
+```bat
+scripts\sign-release.bat
+```
 
-Verify a release:
+This writes `releases/windows/UmbraNote.exe.asc`, `docs/SHA256SUMS`, `docs/SHA256SUMS.asc`, and `docs/UmbraNote_Release_Signing_2026_pubkey.asc`.
+
+Verify:
 
 ```bash
 gpg --import docs/UmbraNote_Release_Signing_2026_pubkey.asc
 gpg --verify docs/SHA256SUMS.asc docs/SHA256SUMS
 gpg --verify releases/windows/UmbraNote.exe.asc releases/windows/UmbraNote.exe
-sha256sum -c docs/SHA256SUMS
 ```
 
-See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) for the key layout, fingerprint, and local Windows code-signing certificate notes.
+See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) for key storage layout and fingerprint.
+
+### Linux (recommended)
+
+```bash
+./build.sh
+```
+
+Equivalent script:
+
+```bash
+./scripts/build-linux.sh
+```
+
+Output: `UmbraNote` in the repository root.
+
+### Manual CMake
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+Windows binary path:
+
+```
+build/platform/win32/UmbraNote.exe
+```
+
+Linux binary path:
+
+```
+build/platform/linux/UmbraNote
+```
 
 ## Keyboard shortcuts
 
 | Action | Shortcut |
-| --- | --- |
+|--------|----------|
 | New | `Ctrl+N` |
 | Open | `Ctrl+O` |
 | Save | `Ctrl+S` |
@@ -165,58 +153,80 @@ See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md) for the key layout, finge
 
 ## Repository layout
 
-```text
+```
 UmbraNote/
-  .github/workflows/      CI configuration
-  core/                   Portable editor services
-    include/zeronote/     Public core headers
-    crypto.cpp            Legacy crypto dispatch and compatibility
-    crypto_v3.cpp         ZNENC3 implementation
-    pdf_export.cpp        Minimal PDF writer
-    secure_memory.cpp     Locked and zeroed memory helpers
-    text_codec.cpp        Text file encoding support
-  docs/                   Security, file format, and release signing docs
-  platform/
-    win32/                Native Windows application
-    linux/                GTK4 Linux application
-  releases/               Local release artifacts
-  scripts/                Build and signing helpers
-  tests/                  Crypto tests and fixtures
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # GitHub Actions build matrix
+├── core/
+│   ├── include/zeronote/       # Public core headers
+│   ├── crypto.cpp              # AES-256-GCM + PBKDF2
+│   ├── pdf_export.cpp          # PDF writer
+│   ├── text_codec.cpp          # UTF-8 / UTF-16 file I/O
+│   └── CMakeLists.txt
+├── platform/
+│   ├── win32/                  # Windows Win32 application
+│   │   ├── main.cpp
+│   │   ├── notepad.cpp
+│   │   ├── resource.rc
+│   │   └── app.manifest
+│   └── linux/                  # Linux GTK4 application
+│       └── main.cpp
+├── docs/
+│   └── FILE_FORMATS.md         # .txt, .zro, and PDF details
+├── scripts/
+│   ├── build-windows.bat
+│   └── build-linux.sh
+├── build.bat                   # Windows wrapper
+├── build.sh                    # Linux wrapper
+├── CMakeLists.txt
+├── CONTRIBUTING.md
+├── LICENSE
+└── README.md
 ```
 
 ## Architecture
 
-UmbraNote separates portable document logic from platform UI code:
+UmbraNote is split into a portable core and thin platform shells:
 
-```text
-platform/win32 or platform/linux
-  menus, dialogs, editor widget, file picker, shell integration
-                |
-                v
-core/
-  text_codec  crypto  secure_memory  pdf_export
+```
+┌─────────────────────────────────────────┐
+│           platform/win32 or linux       │
+│   menus, dialogs, editor widget, shell  │
+└──────────────────┬──────────────────────┘
+                   │
+┌──────────────────▼──────────────────────┐
+│                  core                   │
+│  text_codec  crypto  pdf_export         │
+└─────────────────────────────────────────┘
 ```
 
-The platform layers own native windows, menus, dialogs, and editor widgets. The core owns file encoding, encrypted note formats, secure memory helpers, and PDF generation.
+- **Windows** uses BCrypt for cryptography.
+- **Linux** uses OpenSSL for the same file format and API surface.
+- UI code converts to UTF-8 at the boundary so file logic stays portable.
 
-For cryptography, ZNENC3 uses libsodium on every platform. BCrypt on Windows and OpenSSL on Linux are retained for legacy ZNENC1/ZNENC2 compatibility.
+See [docs/FILE_FORMATS.md](docs/FILE_FORMATS.md) for on-disk layouts and [docs/SECURITY.md](docs/SECURITY.md) for the v3 threat model.
 
-## Supported file types
+## File types
 
 | Extension | Purpose |
-| --- | --- |
-| `.txt` | Plain text |
-| `.zro` | UmbraNote encrypted note |
-| `.pdf` | Exported PDF |
+|-----------|---------|
+| `.txt` | Plain UTF-8 text |
+| `.zro` | Password-encrypted UmbraNote document |
+| `.pdf` | Exported PDF output |
 
-## Current platform notes
+## Roadmap
 
-The Windows frontend is the primary complete UI today. The Linux frontend shares the same core and builds against GTK4, but some encrypted-note UI flows are still catching up with the Windows implementation.
+- [ ] Linux encrypted open/save dialogs
+- [ ] macOS port
+- [ ] Dark mode
+- [ ] Recent files list
+- [ ] Autosave and session restore
 
 ## Contributing
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-UmbraNote is released under the MIT License. See [LICENSE](LICENSE).
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

@@ -1,6 +1,8 @@
 #include "resource.h"
 #include <windows.h>
 
+IDI_ZERONOTE ICON "../../assets/ico/windows/UmbraNote.ico"
+
 IDR_MENU MENU
 BEGIN
     POPUP "&File"

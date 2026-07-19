@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace zeronote {
@@ -9,6 +10,24 @@ namespace zeronote {
 void SecureClear(void* ptr, std::size_t size);
 bool LockMemory(void* ptr, std::size_t size);
 void UnlockMemory(void* ptr, std::size_t size);
+
+
+inline void SecureClearString(std::string& value) {
+    if (!value.empty()) {
+        SecureClear(value.data(), value.size());
+        value.clear();
+        value.shrink_to_fit();
+    }
+}
+
+
+inline void SecureClearWString(std::wstring& value) {
+    if (!value.empty()) {
+        SecureClear(value.data(), value.size() * sizeof(wchar_t));
+        value.clear();
+        value.shrink_to_fit();
+    }
+}
 
 class SecureBuffer {
 public:

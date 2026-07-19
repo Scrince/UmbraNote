@@ -1,11 +1,16 @@
 # File Formats
 
-## Plain text (`.txt`)
+## Plain text
 
-UmbraNote saves plain text as **UTF-8 without a BOM**. When opening a file, UmbraNote auto-detects:
+UmbraNote saves plain text as **UTF-8 without a BOM**. The Open dialog defaults to **All Files**, so any file that may contain text can be opened (Notepad-style), not only `.txt`.
 
-- UTF-8 (with or without BOM)
-- UTF-16 LE / BE
+When opening a file, UmbraNote auto-detects encoding in this order:
+
+- UTF-16 LE / BE (BOM, or heuristic for BOM-less UTF-16)
+- UTF-8 (with or without BOM; validated)
+- System ANSI code page on Windows (Notepad “ANSI”), or ISO-8859-1 / Latin-1 elsewhere
+
+Embedded NUL bytes are shown as spaces so the rest of the document remains visible in the editor.
 
 ## Encrypted notes (`.zro`)
 

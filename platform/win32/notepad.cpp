@@ -3,6 +3,7 @@
 
 #include <zeronote/crypto.h>
 #include <zeronote/pdf_export.h>
+#include <zeronote/secure_memory.h>
 #include <zeronote/text_codec.h>
 
 #include <algorithm>
@@ -516,7 +517,18 @@ std::wstring GetEditText() {
 }
 
 void SetEditText(const std::wstring& text) {
-    SetWindowTextW(g_app.hwndEdit, text.c_str());
+    
+    if (text.find(L'\0') == std::wstring::npos) {
+        SetWindowTextW(g_app.hwndEdit, text.c_str());
+        return;
+    }
+    std::wstring sanitized = text;
+    for (wchar_t& ch : sanitized) {
+        if (ch == L'\0') {
+            ch = L' ';
+        }
+    }
+    SetWindowTextW(g_app.hwndEdit, sanitized.c_str());
 }
 
 std::wstring FoldCase(const std::wstring& text) {
@@ -675,33 +687,45 @@ zeronote::crypto::EncryptionOptions BuildEncryptionOptions(const PasswordDialogP
 }
 
 bool SaveEncryptedFile(const std::wstring& path, const std::wstring& text,
-                       const PasswordDialogParams& auth, std::wstring& error) {
+                       PasswordDialogParams& auth, std::wstring& error) {
     std::vector<uint8_t> encrypted;
     std::string err;
-    if (!zeronote::crypto::EncryptText(zeronote::WideToUtf8(text),
-                                       zeronote::WideToUtf8(auth.password),
-                                       encrypted, err,
-                                       BuildEncryptionOptions(auth))) {
+    std::string passwordUtf8 = zeronote::WideToUtf8(auth.password);
+    const bool ok = zeronote::crypto::EncryptText(zeronote::WideToUtf8(text),
+                                                  passwordUtf8,
+                                                  encrypted, err,
+                                                  BuildEncryptionOptions(auth));
+    zeronote::SecureClearString(passwordUtf8);
+    zeronote::SecureClearWString(auth.password);
+    if (!ok) {
         error = zeronote::Utf8ToWide(err);
         return false;
     }
     return zeronote::WriteFileBytesAtomic(path, encrypted);
 }
 
-bool VerifyExistingEncryptedFile(const std::wstring& path, const PasswordDialogParams& auth,
-                                 std::wstring& error) {
+bool VerifyEncryptedFileAuth(const std::wstring& path, PasswordDialogParams& auth,
+                             std::wstring& error) {
+    
     std::vector<uint8_t> bytes;
     if (!zeronote::ReadFileBytes(path, bytes)) {
         error = L"Cannot read the encrypted file before saving.";
         return false;
     }
+    if (!zeronote::crypto::IsEncryptedFile(bytes)) {
+        error = L"The file on disk is no longer an UmbraNote encrypted note.";
+        return false;
+    }
+
     std::string plaintext;
     std::string err;
-    if (!zeronote::crypto::DecryptText(bytes, zeronote::WideToUtf8(auth.password),
-                                       plaintext, err, BuildEncryptionOptions(auth))) {
-        error = zeronote::Utf8ToWide(err.empty()
-                                         ? "Password or keyfile does not match this file."
-                                         : err);
+    std::string passwordUtf8 = zeronote::WideToUtf8(auth.password);
+    const bool ok = zeronote::crypto::DecryptText(bytes, passwordUtf8,
+                                                  plaintext, err, BuildEncryptionOptions(auth));
+    zeronote::SecureClearString(passwordUtf8);
+    zeronote::SecureClearString(plaintext);
+    if (!ok) {
+        error = zeronote::Utf8ToWide(err);
         return false;
     }
     return true;
@@ -955,29 +979,11 @@ void DoFileNew(HWND hwnd) {
     SetFocus(g_app.hwndEdit);
 }
 
-void DoFileOpen(HWND hwnd) {
-    if (!ConfirmSaveIfNeeded(hwnd)) return;
-
-    wchar_t fileName[MAX_PATH] = L"";
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hwnd;
-    ofn.lpstrFilter =
-        L"All Supported (*.txt;*.zro)\0*.txt;*.zro\0"
-        L"Text Documents (*.txt)\0*.txt\0"
-        L"Encrypted Notes (*.zro)\0*.zro\0"
-        L"All Files (*.*)\0*.*\0";
-    ofn.lpstrFile = fileName;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-    ofn.lpstrDefExt = L"txt";
-
-    if (!GetOpenFileNameW(&ofn)) return;
-
+bool OpenFilePath(HWND hwnd, const std::wstring& path) {
     std::vector<uint8_t> bytes;
-    if (!zeronote::ReadFileBytes(fileName, bytes)) {
+    if (!zeronote::ReadFileBytes(path, bytes)) {
         MessageBoxW(hwnd, L"Cannot open the file.", L"UmbraNote", MB_OK | MB_ICONERROR);
-        return;
+        return false;
     }
 
     std::wstring content;
@@ -991,19 +997,25 @@ void DoFileOpen(HWND hwnd) {
         auth.mode = PasswordDialogMode::Open;
         auth.require_keyfile = info.requires_keyfile;
         auth.paranoid_kdf = info.paranoid_kdf;
-        if (!PromptPassword(hwnd, auth)) return;
+        if (!PromptPassword(hwnd, auth)) return false;
 
         std::string plainUtf8;
         std::string error;
-        if (!zeronote::crypto::DecryptText(bytes, zeronote::WideToUtf8(auth.password),
-                                           plainUtf8, error,
-                                           BuildEncryptionOptions(auth))) {
+        std::string passwordUtf8 = zeronote::WideToUtf8(auth.password);
+        const bool decrypted = zeronote::crypto::DecryptText(bytes, passwordUtf8,
+                                                             plainUtf8, error,
+                                                             BuildEncryptionOptions(auth));
+        zeronote::SecureClearString(passwordUtf8);
+        zeronote::SecureClearWString(auth.password);
+        if (!decrypted) {
+            zeronote::SecureClearString(plainUtf8);
             MessageBoxW(hwnd, zeronote::Utf8ToWide(error).c_str(),
                         L"UmbraNote", MB_OK | MB_ICONERROR);
-            return;
+            return false;
         }
 
         content = zeronote::Utf8ToWide(plainUtf8);
+        zeronote::SecureClearString(plainUtf8);
         g_app.fileEncrypted = true;
         g_app.encryptedRequiresKeyfile = info.requires_keyfile;
         g_app.encryptedParanoidKdf = info.paranoid_kdf;
@@ -1011,17 +1023,40 @@ void DoFileOpen(HWND hwnd) {
         std::string plainUtf8;
         if (!zeronote::DecodeTextFromBytes(bytes, plainUtf8)) {
             MessageBoxW(hwnd, L"Cannot open the file.", L"UmbraNote", MB_OK | MB_ICONERROR);
-            return;
+            return false;
         }
         content = zeronote::Utf8ToWide(plainUtf8);
     }
 
     SetEditText(content);
-    g_app.filePath = fileName;
+    g_app.filePath = path;
     SetModified(false);
     UpdateTitle(hwnd);
     UpdateStatusBar();
     SetFocus(g_app.hwndEdit);
+    return true;
+}
+
+void DoFileOpen(HWND hwnd) {
+    if (!ConfirmSaveIfNeeded(hwnd)) return;
+
+    wchar_t fileName[MAX_PATH] = L"";
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    
+    ofn.lpstrFilter =
+        L"All Files (*.*)\0*.*\0"
+        L"Text Documents (*.txt;*.text;*.log;*.md;*.csv;*.json;*.xml;*.ini;*.cfg)\0"
+        L"*.txt;*.text;*.log;*.md;*.csv;*.json;*.xml;*.ini;*.cfg\0"
+        L"Encrypted Notes (*.zro)\0*.zro\0";
+    ofn.lpstrFile = fileName;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    ofn.lpstrDefExt = nullptr;
+
+    if (!GetOpenFileNameW(&ofn)) return;
+    OpenFilePath(hwnd, fileName);
 }
 
 bool DoFileSave(HWND hwnd) {
@@ -1039,12 +1074,15 @@ bool DoFileSave(HWND hwnd) {
         }
 
         std::wstring error;
-        if (!VerifyExistingEncryptedFile(g_app.filePath, auth, error)) {
-            MessageBoxW(hwnd, error.empty() ? L"Password or keyfile does not match this file."
-                                            : error.c_str(),
+        if (!VerifyEncryptedFileAuth(g_app.filePath, auth, error)) {
+            zeronote::SecureClearWString(auth.password);
+            MessageBoxW(hwnd,
+                        error.empty() ? L"Cannot verify the encrypted file password."
+                                      : error.c_str(),
                         L"UmbraNote", MB_OK | MB_ICONERROR);
             return false;
         }
+        
         if (!SaveEncryptedFile(g_app.filePath, GetEditText(), auth, error)) {
             MessageBoxW(hwnd, error.empty() ? L"Cannot save the encrypted file." : error.c_str(),
                         L"UmbraNote", MB_OK | MB_ICONERROR);
