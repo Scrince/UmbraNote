@@ -1,22 +1,15 @@
 # Build output
 build/
+build-*/
 out/
 dist/
+
+# Local generated asset pack
 assets/
+Asset_Pack/
 
 # Release signing keyring (secret material; mirrors YellowSphere /.gnupg-release/)
 /.gnupg-release/
-
-# Private keys and certificate bundles
-*.key
-*.pem
-*.pfx
-*.p12
-*.ppk
-id_rsa
-id_dsa
-id_ecdsa
-id_ed25519
 
 # Binaries and objects
 *.exe
@@ -37,8 +30,13 @@ UmbraNote.exe
 !releases/windows/
 !releases/windows/UmbraNote.exe
 !releases/windows/*.asc
+!releases/linux/
+!releases/linux/**
+!releases/macos/
+!releases/macos/**
 !docs/SHA256SUMS
 !docs/*.asc
+!docs/*.cer
 
 # CMake
 CMakeFiles/
