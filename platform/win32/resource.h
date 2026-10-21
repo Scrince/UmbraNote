@@ -23,6 +23,7 @@
 #define IDC_KEYFILE_PATH           2011
 #define IDC_KEYFILE_BROWSE         2012
 #define IDC_PARANOID_KDF           2013
+#define IDC_KEYFILE_GENERATE       2014
 
 #define IDM_FILE_NEW          40001
 #define IDM_FILE_OPEN         40002

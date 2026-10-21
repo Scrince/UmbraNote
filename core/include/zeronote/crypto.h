@@ -38,4 +38,10 @@ bool DecryptText(const std::vector<std::uint8_t>& data, const std::string& passw
                  std::string& plaintextUtf8, std::string& error,
                  const EncryptionOptions& options = {});
 
+/** Fill `out` with `size` CSPRNG bytes (libsodium randombytes). Default 64. */
+bool GenerateKeyfile(std::vector<std::uint8_t>& out, std::size_t size = 64);
+
+/** Write a new keyfile of `size` random bytes to `path` (atomic where possible). */
+bool GenerateKeyfileFile(const std::string& path, std::string& error, std::size_t size = 64);
+
 }

@@ -30,13 +30,8 @@ UmbraNote.exe
 !releases/windows/
 !releases/windows/UmbraNote.exe
 !releases/windows/*.asc
-!releases/linux/
-!releases/linux/**
-!releases/macos/
-!releases/macos/**
 !docs/SHA256SUMS
 !docs/*.asc
-!docs/*.cer
 
 # CMake
 CMakeFiles/
@@ -63,3 +58,12 @@ desktop.ini
 *.log
 *.tmp
 *~
+
+# Windows installer release assets
+!release/windows/UmbraNote-Setup-1.2.0.exe
+!release/windows/UmbraNote-Setup-1.2.0.exe.asc
+!release/windows/SHA256SUMS
+!release/windows/SHA256SUMS.asc
+
+# Local build output/signature sidecar; packaged copy is under releases/
+/UmbraNote.exe.asc

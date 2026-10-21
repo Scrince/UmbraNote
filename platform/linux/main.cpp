@@ -181,6 +181,11 @@ void OnPasswordDialogResponse(GtkDialog* dialog, int response, gpointer user_dat
     }
 
     *widgets->params = std::move(result);
+    // Clear password entry widgets so dialog widgets do not retain secrets.
+    gtk_entry_set_text(GTK_ENTRY(widgets->password), "");
+    if (widgets->confirm) {
+        gtk_entry_set_text(GTK_ENTRY(widgets->confirm), "");
+    }
     widgets->finished = true;
     widgets->accepted = true;
     gtk_widget_destroy(GTK_WIDGET(dialog));
@@ -199,6 +204,34 @@ void OnKeyfileBrowseClicked(GtkButton*, gpointer user_data) {
         }
     }
     gtk_widget_destroy(chooser);
+}
+
+void OnKeyfileGenerateClicked(GtkButton*, gpointer user_data) {
+    auto* widgets = static_cast<PasswordDialogWidgets*>(user_data);
+    GtkWidget* chooser = gtk_file_chooser_dialog_new(
+        "Generate Keyfile", GTK_WINDOW(widgets->dialog), GTK_FILE_CHOOSER_ACTION_SAVE,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_Save", GTK_RESPONSE_ACCEPT, nullptr);
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(chooser), "umbranote.key");
+    if (gtk_dialog_run(GTK_DIALOG(chooser)) != GTK_RESPONSE_ACCEPT) {
+        gtk_widget_destroy(chooser);
+        return;
+    }
+    char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(chooser));
+    gtk_widget_destroy(chooser);
+    if (!path) return;
+    std::string error;
+    if (!zeronote::crypto::GenerateKeyfileFile(path, error, 64)) {
+        ShowError(error.empty() ? "Could not generate keyfile." : error.c_str());
+        g_free(path);
+        return;
+    }
+    gtk_entry_set_text(GTK_ENTRY(widgets->keyfile_path), path);
+    g_free(path);
+    GtkWidget* info = gtk_message_dialog_new(
+        GTK_WINDOW(widgets->dialog), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
+        "Keyfile generated (64 random bytes). Store it separately from the note.");
+    gtk_dialog_run(GTK_DIALOG(info));
+    gtk_widget_destroy(info);
 }
 
 bool PromptPassword(PasswordDialogParams& params) {
@@ -248,9 +281,13 @@ bool PromptPassword(PasswordDialogParams& params) {
     widgets.keyfile_path = gtk_entry_new();
     gtk_editable_set_editable(GTK_EDITABLE(widgets.keyfile_path), FALSE);
     GtkWidget* browse = gtk_button_new_with_label("Browse...");
+    GtkWidget* generate = gtk_button_new_with_label("Generate...");
+    GtkWidget* keyfile_buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_box_pack_start(GTK_BOX(keyfile_buttons), browse, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(keyfile_buttons), generate, FALSE, FALSE, 0);
     gtk_grid_attach(GTK_GRID(grid), widgets.keyfile_label, 0, 2, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), widgets.keyfile_path, 1, 2, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), browse, 2, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), keyfile_buttons, 2, 2, 1, 1);
 
     widgets.paranoid = gtk_check_button_new_with_label(
         "High-security mode (Argon2id + keyfile required)");
@@ -261,7 +298,8 @@ bool PromptPassword(PasswordDialogParams& params) {
     gtk_grid_attach(GTK_GRID(grid), widgets.paranoid, 0, 3, 3, 1);
 
     GtkWidget* hint = gtk_label_new(
-        "Uses XChaCha20-Poly1305, Argon2id, and re-auth on save.");
+        "Uses XChaCha20-Poly1305, Argon2id, and re-auth on save. "
+        "Store keyfiles separately from the note (USB recommended).");
     gtk_widget_set_halign(hint, GTK_ALIGN_START);
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE);
     gtk_grid_attach(GTK_GRID(grid), hint, 0, 4, 3, 1);
@@ -271,6 +309,7 @@ bool PromptPassword(PasswordDialogParams& params) {
     gtk_dialog_set_default_response(GTK_DIALOG(widgets.dialog), GTK_RESPONSE_OK);
 
     g_signal_connect(browse, "clicked", G_CALLBACK(OnKeyfileBrowseClicked), &widgets);
+    g_signal_connect(generate, "clicked", G_CALLBACK(OnKeyfileGenerateClicked), &widgets);
     g_signal_connect(widgets.dialog, "response", G_CALLBACK(OnPasswordDialogResponse), &widgets);
 
     gtk_widget_set_visible(widgets.dialog, TRUE);

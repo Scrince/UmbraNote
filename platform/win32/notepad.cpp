@@ -1548,19 +1548,51 @@ INT_PTR CALLBACK PasswordDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     }
                     return TRUE;
                 }
+                case IDC_KEYFILE_GENERATE: {
+                    wchar_t fileName[MAX_PATH] = L"umbranote.key";
+                    OPENFILENAMEW ofn{};
+                    ofn.lStructSize = sizeof(ofn);
+                    ofn.hwndOwner = hwnd;
+                    ofn.lpstrFilter = L"Keyfiles (*.key)\0*.key\0All files (*.*)\0*.*\0";
+                    ofn.lpstrFile = fileName;
+                    ofn.nMaxFile = MAX_PATH;
+                    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+                    ofn.lpstrDefExt = L"key";
+                    if (!GetSaveFileNameW(&ofn)) {
+                        return TRUE;
+                    }
+                    std::string error;
+                    if (!zeronote::crypto::GenerateKeyfileFile(
+                            zeronote::WideToUtf8(fileName), error, 64)) {
+                        MessageBoxW(hwnd,
+                                    error.empty()
+                                        ? L"Could not generate keyfile."
+                                        : zeronote::Utf8ToWide(error).c_str(),
+                                    L"UmbraNote", MB_OK | MB_ICONWARNING);
+                        return TRUE;
+                    }
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_KEYFILE_PATH), fileName);
+                    MessageBoxW(hwnd,
+                                L"Keyfile generated (64 random bytes).\n"
+                                L"Store it separately from the note file (e.g. USB).",
+                                L"UmbraNote", MB_OK | MB_ICONINFORMATION);
+                    return TRUE;
+                }
                 case IDOK: {
                     auto* params = reinterpret_cast<PasswordDialogParams*>(
                         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-                    const std::wstring password = GetWindowTextString(GetDlgItem(hwnd, IDC_PASSWORD));
+                    std::wstring password = GetWindowTextString(GetDlgItem(hwnd, IDC_PASSWORD));
                     if (password.empty()) {
                         MessageBoxW(hwnd, L"Password cannot be empty.", L"UmbraNote",
                                     MB_OK | MB_ICONWARNING);
                         return TRUE;
                     }
+                    std::wstring confirm;
                     if (params && params->mode == PasswordDialogMode::Save) {
-                        const std::wstring confirm =
-                            GetWindowTextString(GetDlgItem(hwnd, IDC_PASSWORD_CONFIRM));
+                        confirm = GetWindowTextString(GetDlgItem(hwnd, IDC_PASSWORD_CONFIRM));
                         if (password != confirm) {
+                            zeronote::SecureClearWString(password);
+                            zeronote::SecureClearWString(confirm);
                             MessageBoxW(hwnd, L"Passwords do not match.", L"UmbraNote",
                                         MB_OK | MB_ICONWARNING);
                             return TRUE;
@@ -1575,18 +1607,24 @@ INT_PTR CALLBACK PasswordDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     if (!keyfilePath.empty()) {
                         std::wstring keyfileError;
                         if (!LoadKeyfileBytes(keyfilePath, keyfile, keyfileError)) {
+                            zeronote::SecureClearWString(password);
+                            zeronote::SecureClearWString(confirm);
                             MessageBoxW(hwnd, keyfileError.c_str(), L"UmbraNote",
                                         MB_OK | MB_ICONWARNING);
                             return TRUE;
                         }
                     }
                     if (paranoid && keyfile.empty()) {
+                        zeronote::SecureClearWString(password);
+                        zeronote::SecureClearWString(confirm);
                         MessageBoxW(hwnd,
                                     L"High-security mode requires a keyfile in addition to the password.",
                                     L"UmbraNote", MB_OK | MB_ICONWARNING);
                         return TRUE;
                     }
                     if (params && params->require_keyfile && keyfile.empty()) {
+                        zeronote::SecureClearWString(password);
+                        zeronote::SecureClearWString(confirm);
                         MessageBoxW(hwnd, L"This file requires the original keyfile.",
                                     L"UmbraNote", MB_OK | MB_ICONWARNING);
                         return TRUE;
@@ -1596,6 +1634,8 @@ INT_PTR CALLBACK PasswordDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     if (!zeronote::crypto::ValidateEncryptionPassword(
                             zeronote::WideToUtf8(password), paranoid, passwordError) &&
                         params && params->mode == PasswordDialogMode::Save) {
+                        zeronote::SecureClearWString(password);
+                        zeronote::SecureClearWString(confirm);
                         MessageBoxW(hwnd, zeronote::Utf8ToWide(passwordError).c_str(),
                                     L"UmbraNote", MB_OK | MB_ICONWARNING);
                         return TRUE;
@@ -1607,10 +1647,17 @@ INT_PTR CALLBACK PasswordDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                         params->keyfilePath = keyfilePath;
                         params->paranoid_kdf = paranoid;
                     }
+                    zeronote::SecureClearWString(password);
+                    zeronote::SecureClearWString(confirm);
+                    // Clear password edit controls so the dialog stack does not retain text.
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_PASSWORD), L"");
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_PASSWORD_CONFIRM), L"");
                     EndDialog(hwnd, IDOK);
                     return TRUE;
                 }
                 case IDCANCEL:
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_PASSWORD), L"");
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_PASSWORD_CONFIRM), L"");
                     EndDialog(hwnd, IDCANCEL);
                     return TRUE;
             }

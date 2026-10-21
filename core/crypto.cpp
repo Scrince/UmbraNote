@@ -1,9 +1,12 @@
 #include <zeronote/crypto.h>
 #include <zeronote/crypto_internal.h>
 #include <zeronote/secure_memory.h>
+#include <zeronote/text_codec.h>
 
 #include <cstring>
 #include <vector>
+
+#include <sodium.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -569,6 +572,33 @@ bool EncryptLegacyV1ForTest(const std::string& plaintextUtf8, const std::string&
                 cipher.data(), cipher.size());
     std::memcpy(output.data() + kMagicSize + 1 + kSaltSizeV1 + kIvSize + cipher.size(),
                 tag, kTagSize);
+    return true;
+}
+
+bool GenerateKeyfile(std::vector<std::uint8_t>& out, std::size_t size) {
+    if (size < kMinKeyfileSize) {
+        size = kMinKeyfileSize;
+    }
+    if (sodium_init() < 0) {
+        return false;
+    }
+    out.resize(size);
+    randombytes_buf(out.data(), out.size());
+    return true;
+}
+
+bool GenerateKeyfileFile(const std::string& path, std::string& error, std::size_t size) {
+    std::vector<std::uint8_t> bytes;
+    if (!GenerateKeyfile(bytes, size)) {
+        error = "Could not generate keyfile bytes (libsodium init/CSPRNG failed).";
+        return false;
+    }
+    if (!zeronote::WriteFileBytesAtomic(path, bytes)) {
+        zeronote::SecureClear(bytes.data(), bytes.size());
+        error = "Could not write keyfile to disk.";
+        return false;
+    }
+    zeronote::SecureClear(bytes.data(), bytes.size());
     return true;
 }
 

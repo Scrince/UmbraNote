@@ -2,7 +2,6 @@
 
 A lightweight, cross-platform text editor written in modern C++. UmbraNote feels familiar like Windows Notepad, with optional encrypted notes, PDF export, and a clean native UI on Windows and Linux.
 
-![CI](https://github.com/YOUR_USERNAME/UmbraNote/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
@@ -19,18 +18,14 @@ A lightweight, cross-platform text editor written in modern C++. UmbraNote feels
 
 ## Screenshots
 
-> Add screenshots after your first GitHub release:
->
-> `docs/screenshots/windows-editor.png`
-> `docs/screenshots/linux-editor.png`
+Optional screenshots can live under `docs/screenshots/` when publishing releases.
 
 ## Quick start
 
 ### Windows
 
 ```bat
-git clone https://github.com/YOUR_USERNAME/UmbraNote.git
-cd UmbraNote
+cd /d T:\UmbraNote
 build.bat
 UmbraNote.exe
 ```
@@ -38,12 +33,13 @@ UmbraNote.exe
 ### Linux
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/UmbraNote.git
-cd UmbraNote
+cd /path/to/UmbraNote
 chmod +x build.sh
 ./build.sh
 ./UmbraNote
 ```
+
+Encrypted `.zro` open/save is supported on **both Windows and Linux** (password, optional keyfile, Generate keyfile…).
 
 ## Requirements
 
@@ -230,3 +226,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Windows installer
+
+See [Windows installer and signature verification](docs/WINDOWS_INSTALLER.md) for the download path and verification steps.
